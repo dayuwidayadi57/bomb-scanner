@@ -216,6 +216,12 @@
     margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
     color: var(--ink-faint); font-size: 11px; line-height: 1.6;
   }
+
+  /* SPARKLINE */
+  .spark-wrap{ position: relative; margin-bottom: 8px; }
+  .spark-canvas{ display:block; width:100%; height:44px; border-radius:8px; background:
+    linear-gradient(180deg, color-mix(in srgb, var(--coil) 5%, transparent), transparent); }
+
   .streak-badge{ font-size: 11px; color: var(--ink-faint); font-weight: 600; }
 
   footer{ border-top: 1px solid var(--line); padding: 36px 0 30px; }
@@ -515,6 +521,65 @@
     return fr < 0 ? '🔴SQZ' : '🟢BUY';
   }
 
+  // ================= sparkline (mini chart harga per card) =================
+  function drawSparkline(canvas, closes){
+    if (!canvas || !closes || closes.length < 2) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const min = Math.min.apply(null, closes);
+    const max = Math.max.apply(null, closes);
+    const span = (max - min) || 1;
+    const padX = 3, padY = 4;
+
+    const pts = closes.map((c, i) => {
+      const x = padX + (i / (closes.length - 1)) * (w - padX * 2);
+      const y = padY + (1 - (c - min) / span) * (h - padY * 2);
+      return [x, y];
+    });
+
+    // warna ikut trend keseluruhan
+    const upTrend = closes[closes.length-1] >= closes[0];
+    const lineColor = upTrend ? '#4ADE80' : '#FF4D6A';
+
+    // area gradient fill
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], h - padY);
+    pts.forEach(p => ctx.lineTo(p[0], p[1]));
+    ctx.lineTo(pts[pts.length-1][0], h - padY);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, upTrend ? 'rgba(74,222,128,0.22)' : 'rgba(255,77,106,0.22)');
+    grad.addColorStop(1, upTrend ? 'rgba(74,222,128,0)' : 'rgba(255,77,106,0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // garis utama
+    ctx.beginPath();
+    pts.forEach((p,i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // titik harga terakhir (glow)
+    const last = pts[pts.length-1];
+    ctx.save();
+    ctx.shadowColor = lineColor;
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = lineColor;
+    ctx.beginPath();
+    ctx.arc(last[0], last[1], 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+  }
+
   async function fetchOIMap(symbols){
     const out = {};
     await mapLimit(symbols, CONCURRENCY, async (sym) => {
@@ -740,7 +805,9 @@
           sym: sym, price: price, pct24: pct24, qv: qv, oiUsd: oiUsd, volOi: volOi,
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
-          takerRatio: tr, solid: isSolid, setupTag: setupTag, reasons: reasons.join(', ')
+          takerRatio: tr, solid: isSolid, setupTag: setupTag,
+          closesSeries: closes.slice(-48), // 48 candle 1h terakhir utk sparkline
+          reasons: reasons.join(', ')
         });
       }catch(e){ continue; }
     }
@@ -774,6 +841,7 @@
           '</div>' +
           '<div class="card-body">' +
             '<div class="card-price">' + fmtPrice(r.price) + '<span class="pct ' + pctClass + '">' + (r.pct24>=0?'+':'') + r.pct24.toFixed(2) + '% 24h</span></div>' +
+            '<div class="spark-wrap"><canvas class="spark-canvas" data-sym="' + r.sym.replace(/[^A-Z0-9]/g,'') + '"></canvas></div>' +
             '<div class="card-row"><span>OI</span><b>' + oiStr + '</b></div>' +
             '<div class="card-row"><span>Vol</span><b>' + fmtCompact(r.qv) + '</b></div>' +
             '<div class="card-row"><span>Funding</span><b>' + (r.fr>=0?'+':'') + r.fr.toFixed(5) + '%</b></div>' +
@@ -787,6 +855,14 @@
           '</div>' +
         '</div>';
     }).join('');
+
+    // gambar sparkline utk tiap card (data closesSeries sudah disimpan saat scan)
+    shown.forEach(function(r){
+      var cv = document.querySelector('.spark-canvas[data-sym="' + r.sym.replace(/[^A-Z0-9]/g,'') + '"]');
+      if (cv && r.closesSeries && r.closesSeries.length >= 2){
+        drawSparkline(cv, r.closesSeries);
+      }
+    });
 
     const solids = shown.filter(r => r.solid).map(r => r.sym);
     if (solids.length){
