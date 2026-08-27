@@ -514,7 +514,12 @@
   // --- Setup Type Tag ---
   const SETUP_TAKER_MIN = 1.2;
 
-  const MAX_SCORE_THEORETICAL = 111; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18
+  // --- H1 trend context filter ---
+  const EMA100_PERIOD = 100;
+  const EMA100_BONUS = 6;        // price above EMA100(H1): structural uptrend context
+  const EMA100_BELOW_MULT = 0.85; // price below EMA100(H1): dampen score, likely counter-trend noise
+
+  const MAX_SCORE_THEORETICAL = 117; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA100(H1)6
 
   const TRADFI_CACHE_TTL_MS = 6 * 3600 * 1000;
 
@@ -672,6 +677,18 @@
     }
 
     return { score, reasons, priceVel };
+  }
+
+  // Exponential Moving Average, seeded with an SMA of the first `period` closes.
+  // Returns null if there isn't enough history to seed it properly.
+  function computeEMA(closes, period){
+    if (!closes || closes.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a,b) => a+b, 0) / period;
+    for (let i = period; i < closes.length; i++){
+      ema = closes[i] * k + ema * (1 - k);
+    }
+    return ema;
   }
 
   // Visual tag: distinguish short-squeeze vs buyer-accumulation setups
@@ -1005,6 +1022,25 @@
         if (volOi >= 50){ score += 5; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
         else if (volOi >= 20){ score += 3; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
 
+        // --- H1 trend context: EMA100 ---
+        // v3.4: pure squeeze/OI/momentum signals don't care whether price sits
+        // above or below the dominant H1 trend average — but a "pre-explosion"
+        // coil below EMA100 is much more likely to be counter-trend noise than
+        // a genuine breakout setup. Reward structural alignment, dampen against it.
+        const ema100 = computeEMA(closes, EMA100_PERIOD);
+        let aboveEma100 = null;
+        if (ema100 !== null){
+          const lastClose = closes[closes.length - 1];
+          aboveEma100 = lastClose > ema100;
+          if (aboveEma100){
+            score += EMA100_BONUS;
+            reasons.push('EMA100(H1)+ ' + (((lastClose - ema100) / ema100) * 100).toFixed(1) + '%');
+          } else {
+            score = Math.round(score * EMA100_BELOW_MULT);
+            reasons.push('⚠️ Below EMA100(H1)');
+          }
+        }
+
         // --- Core thesis gate: coiled energy, not momentum that's already running ---
         // v3.2: hasAccumulation used to trigger on oiChg1h > 0 (literally +0.01%
         // counted). That let pure-momentum coins (VolSpike+Velocity+TkrDom, all
@@ -1043,6 +1079,7 @@
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
           microCap: isMicroCap, alreadyMoving: alreadyMoving,
+          ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
         });
