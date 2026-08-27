@@ -225,7 +225,14 @@
     font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
     flex-wrap: wrap;
   }
-  .sort-bar > .sort-label{ text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); font-size: 10.5px; }
+  .sort-bar.center{
+    flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 8px;
+  }
+  .sort-bar.center .sort-chips{
+    display:flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+    width: 100%;
+  }
   .sort-chip{
     display:inline-flex; align-items:center; gap: 5px;
     padding: 5px 10px; border-radius: 999px;
@@ -382,18 +389,21 @@
           <span>🟢 BUY = buyer accumulation</span>
           <span id="solidLine" style="display:none;">💥 <b id="solidSyms"></b></span>
         </div>
-      <div class="sort-bar" role="toolbar" aria-label="Sort candidates">
+      </div>
+      <div class="sort-bar center" role="toolbar" aria-label="Sort candidates">
         <span class="sort-label">Sort by</span>
-        <button class="sort-chip active" data-sort="score"   title="Bomb score">🔥 Score</button>
-        <button class="sort-chip"        data-sort="pct24"   title="24-hour price change">📈 24h %</button>
-        <button class="sort-chip"        data-sort="bb"      title="Bollinger bandwidth, lower = tighter">📊 BB width</button>
-        <button class="sort-chip"        data-sort="volSpike" title="Volume multiple vs average">💥 Vol spike</button>
-        <button class="sort-chip"        data-sort="oiChg1h" title="Open interest change 1 hour">💰 OI Δ 1h</button>
-        <button class="sort-chip"        data-sort="squeezeLen" title="Hours of volatility squeeze">⏳ Squeeze</button>
-        <button class="sort-dir" id="sortDirBtn" title="Toggle sort direction" aria-label="Toggle sort direction">
-          <span class="arrow" id="sortDirArrow">↓</span>
-          <span id="sortDirLabel">High → Low</span>
-        </button>
+        <div class="sort-chips">
+          <button class="sort-chip active" data-sort="score"   title="Bomb score">🔥 Score</button>
+          <button class="sort-chip"        data-sort="pct24"   title="24-hour price change">📈 24h %</button>
+          <button class="sort-chip"        data-sort="bb"      title="Bollinger bandwidth, lower = tighter">📊 BB width</button>
+          <button class="sort-chip"        data-sort="volSpike" title="Volume multiple vs average">💥 Vol spike</button>
+          <button class="sort-chip"        data-sort="oiChg1h" title="Open interest change 1 hour">💰 OI Δ 1h</button>
+          <button class="sort-chip"        data-sort="squeezeLen" title="Hours of volatility squeeze">⏳ Squeeze</button>
+          <button class="sort-dir" id="sortDirBtn" title="Toggle sort direction" aria-label="Toggle sort direction">
+            <span class="arrow" id="sortDirArrow">↓</span>
+            <span id="sortDirLabel">High → Low</span>
+          </button>
+        </div>
       </div>
       <div class="card-grid" id="cardGrid">
         <div class="empty-state">Waiting for the first scan cycle to finish…</div>
