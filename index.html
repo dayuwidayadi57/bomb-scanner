@@ -1,103 +1,117 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Bomb Score Scanner — Live Monitor</title>
-<meta name="description" content="Live monitoring koin Binance Futures yang lagi kompresi volatilitas — scoring real-time, langsung dari browser, 100% Binance API." />
+<meta name="description" content="Live monitor for Binance Futures coins coiled in volatility compression — real-time scoring, straight from your browser, 100% Binance API." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root{
-    --void: #0A0E14;
-    --panel: #111826;
-    --panel-2: #161F30;
-    --line: rgba(232,238,248,0.09);
-    --line-strong: rgba(232,238,248,0.16);
-    --coil: #3DDBD9;
-    --coil-dim: rgba(61,219,217,0.14);
-    --ember: #FF8A3D;
-    --blast: #FF4D6A;
-    --green: #4ADE80;
-    --ink: #E8EDF4;
-    --ink-dim: rgba(232,237,244,0.6);
-    --ink-faint: rgba(232,237,244,0.38);
-    --radius: 16px;
-    --font-display: "Big Shoulders Display", "Inter", sans-serif;
+    --void: #0B0D10;
+    --panel: #12151A;
+    --panel-2: #171B21;
+    --grid-line: rgba(236,238,228,0.035);
+    --line: rgba(236,238,228,0.09);
+    --line-strong: rgba(236,238,228,0.17);
+    --amber: #FFB020;
+    --amber-dim: rgba(255,176,32,0.14);
+    --phosphor: #4CFFB0;
+    --phosphor-dim: rgba(76,255,176,0.14);
+    --wire: #FF7A45;
+    --danger: #FF4141;
+    --ink: #ECEEE4;
+    --ink-dim: rgba(236,238,228,0.62);
+    --ink-faint: rgba(236,238,228,0.40);
+    --radius: 14px;
+    --font-display: "Chakra Petch", "Inter", sans-serif;
     --font-body: "Inter", sans-serif;
     --font-mono: "JetBrains Mono", monospace;
     color-scheme: dark;
   }
   html[data-theme="light"]{
-    --void: #EEF1EF;
+    --void: #F0EFE9;
     --panel: #FFFFFF;
-    --panel-2: #F7F8F6;
-    --line: rgba(16,21,28,0.10);
-    --line-strong: rgba(16,21,28,0.18);
-    --coil: #0E8E8B;
-    --coil-dim: rgba(14,142,139,0.10);
-    --ember: #D9600A;
-    --blast: #D6234A;
-    --green: #178A4C;
-    --ink: #10151C;
-    --ink-dim: rgba(16,21,28,0.62);
-    --ink-faint: rgba(16,21,28,0.42);
+    --panel-2: #F8F7F2;
+    --grid-line: rgba(11,13,16,0.035);
+    --line: rgba(11,13,16,0.10);
+    --line-strong: rgba(11,13,16,0.18);
+    --amber: #B9770E;
+    --amber-dim: rgba(185,119,14,0.12);
+    --phosphor: #0E9A6B;
+    --phosphor-dim: rgba(14,154,107,0.12);
+    --wire: #C9531F;
+    --danger: #C4321F;
+    --ink: #12151A;
+    --ink-dim: rgba(18,21,26,0.64);
+    --ink-faint: rgba(18,21,26,0.42);
     color-scheme: light;
   }
   *{ box-sizing: border-box; }
   html{ scroll-behavior: smooth; }
   body{
-    margin:0; background: var(--void); color: var(--ink);
+    margin:0; background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0/100% 28px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0/28px 100%,
+      var(--void);
+    color: var(--ink);
     font-family: var(--font-body); -webkit-font-smoothing: antialiased;
-    overflow-x: hidden; transition: background .35s ease, color .35s ease;
+    overflow-x: hidden; transition: background-color .35s ease, color .35s ease;
   }
   a{ color: inherit; } button{ font-family: inherit; }
-  :focus-visible{ outline: 2px solid var(--coil); outline-offset: 3px; }
+  :focus-visible{ outline: 2px solid var(--amber); outline-offset: 3px; }
   @media (prefers-reduced-motion: reduce){
     *{ animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   }
-  .wrap{ max-width: 1180px; margin: 0 auto; padding: 0 22px; }
+  .wrap{ max-width: 1180px; margin: 0 auto; padding: 0 20px; }
   code, .mono{ font-family: var(--font-mono); }
+
+  /* HAZARD STRIPE — signature divider */
+  .hazard{
+    height: 6px;
+    background: repeating-linear-gradient(-45deg, var(--amber), var(--amber) 10px, var(--void) 10px, var(--void) 20px);
+    opacity: 0.9;
+  }
 
   /* NAV */
   .nav{
     position: sticky; top: 0; z-index: 50;
-    background: color-mix(in srgb, var(--void) 88%, transparent);
+    background: color-mix(in srgb, var(--void) 90%, transparent);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
   }
-  .nav-inner{ display:flex; align-items:center; justify-content:space-between; padding: 14px 0; gap: 12px; flex-wrap: wrap; }
+  .nav-inner{ display:flex; align-items:center; justify-content:space-between; padding: 13px 0; gap: 10px; flex-wrap: wrap; }
   .brand{ display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--ink); }
   .brand-mark{
-    width: 32px; height:32px; border-radius: 8px; background: var(--ink); color: var(--void);
+    width: 34px; height:34px; background: var(--amber); color: var(--void);
     display:flex; align-items:center; justify-content:center;
-    font-family: var(--font-mono); font-weight:700; font-size: 14px; flex-shrink:0;
-    position: relative; overflow: hidden;
+    font-family: var(--font-display); font-weight:700; font-size: 15px; flex-shrink:0;
+    clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
   }
-  .brand-mark::after{ content:""; position:absolute; inset:0; background: linear-gradient(180deg, transparent 40%, var(--coil) 100%); opacity:.55; }
-  .brand-name{ font-family: var(--font-mono); font-weight:700; font-size: 14.5px; letter-spacing: -0.01em; }
-  .brand-name span{ color: var(--ink-faint); font-weight: 500; }
+  .brand-name{ font-family: var(--font-display); font-weight:700; font-size: 15px; letter-spacing: 0.01em; text-transform: uppercase; }
+  .brand-name span{ color: var(--ink-faint); font-weight: 500; text-transform: none; }
 
   .status-pill{
-    display:flex; align-items:center; gap: 8px;
-    font-family: var(--font-mono); font-size: 12px;
-    padding: 7px 12px; border-radius: 100px;
+    display:flex; align-items:center; gap: 7px;
+    font-family: var(--font-mono); font-size: 11.5px;
+    padding: 6px 11px; border-radius: 100px;
     border: 1px solid var(--line-strong);
     color: var(--ink-dim);
   }
   .status-dot{ width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); flex-shrink:0; }
-  .status-pill.live .status-dot{ background: var(--green); box-shadow: 0 0 0 0 rgba(74,222,128,0.5); animation: livepulse 1.6s ease-in-out infinite; }
-  .status-pill.scanning .status-dot{ background: var(--coil); animation: livepulse 0.9s ease-in-out infinite; }
-  .status-pill.error .status-dot{ background: var(--blast); }
-  @keyframes livepulse{ 0%,100%{ box-shadow: 0 0 0 0 rgba(74,222,128,0.45); } 70%{ box-shadow: 0 0 0 7px rgba(74,222,128,0); } }
+  .status-pill.live .status-dot{ background: var(--phosphor); box-shadow: 0 0 0 0 rgba(76,255,176,0.5); animation: livepulse 1.6s ease-in-out infinite; }
+  .status-pill.scanning .status-dot{ background: var(--amber); animation: livepulse 0.9s ease-in-out infinite; }
+  .status-pill.error .status-dot{ background: var(--danger); }
+  @keyframes livepulse{ 0%,100%{ box-shadow: 0 0 0 0 rgba(76,255,176,0.45); } 70%{ box-shadow: 0 0 0 7px rgba(76,255,176,0); } }
 
-  .nav-right{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+  .nav-right{ display:flex; align-items:center; gap: 8px; flex-wrap: wrap; }
 
   .btn{
-    font-family: var(--font-mono); font-weight: 600; font-size: 12.5px;
-    border-radius: 9px; padding: 9px 14px; border: 1px solid var(--line-strong);
+    font-family: var(--font-mono); font-weight: 600; font-size: 12px;
+    border-radius: 8px; padding: 8px 13px; border: 1px solid var(--line-strong);
     cursor: pointer; transition: transform .15s ease, background .15s ease;
     white-space: nowrap; display: inline-flex; align-items:center; gap:6px;
     background: var(--panel); color: var(--ink);
@@ -105,146 +119,159 @@
   .btn:hover{ background: var(--panel-2); }
   .btn:active{ transform: scale(0.97); }
   .btn:disabled{ opacity: .5; cursor: not-allowed; }
-  .btn-primary{ background: var(--ink); color: var(--void); border-color: var(--ink); }
 
   .theme-toggle{
-    width: 36px; height: 36px; border-radius: 9px; border: 1px solid var(--line-strong);
+    width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line-strong);
     background: var(--panel); color: var(--ink); cursor: pointer;
     display:flex; align-items:center; justify-content:center;
   }
   .theme-toggle:hover{ background: var(--panel-2); }
-  .theme-toggle svg{ width:16px; height:16px; }
+  .theme-toggle svg{ width:15px; height:15px; }
   .theme-toggle .icon-sun{ display:none; }
   html[data-theme="light"] .theme-toggle .icon-moon{ display:none; }
   html[data-theme="light"] .theme-toggle .icon-sun{ display:block; }
 
-  /* HERO / CONTROL STRIP */
-  .hero{ padding: 40px 0 28px; }
-  .hero-top{ display:flex; justify-content: space-between; align-items:flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 26px; }
+  /* HERO */
+  .hero{ padding: 30px 0 26px; }
+  .hero-top{ display:flex; justify-content: space-between; align-items:center; gap: 20px; flex-wrap: wrap; margin-bottom: 24px; }
   .eyebrow{
     display:inline-flex; align-items:center; gap:8px;
-    font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--coil); margin-bottom: 12px;
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--amber); margin-bottom: 10px;
   }
   h1{
     font-family: var(--font-display); font-weight: 700;
-    font-size: clamp(30px, 4.4vw, 46px); line-height: 0.98; letter-spacing: -0.01em;
+    font-size: clamp(26px, 6vw, 38px); line-height: 1.02; letter-spacing: -0.01em;
     margin: 0; text-transform: uppercase;
   }
-  .countdown{ text-align: right; font-family: var(--font-mono); }
-  .countdown-label{ font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
-  .countdown-value{ font-size: 26px; font-weight: 700; color: var(--ink); }
-  .countdown-value.tick{ color: var(--coil); }
+
+  /* DETONATOR DIAL — signature element */
+  .dial-block{ display:flex; align-items:center; gap: 14px; flex-shrink:0; }
+  .dial{ position: relative; width: 78px; height: 78px; flex-shrink:0; }
+  .dial-svg{ width:100%; height:100%; transform: rotate(-90deg); }
+  .dial-track{ fill:none; stroke: var(--line-strong); stroke-width: 6; }
+  .dial-progress{
+    fill:none; stroke: var(--amber); stroke-width: 6; stroke-linecap: round;
+    stroke-dasharray: 263.9; stroke-dashoffset: 0;
+    transition: stroke-dashoffset 1s linear, stroke .2s ease;
+  }
+  .dial-progress.tick{ stroke: var(--danger); }
+  .dial-center{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .dial-value{ font-family: var(--font-mono); font-size: 18px; font-weight:700; color: var(--ink); line-height:1; }
+  .dial-unit{ font-family: var(--font-mono); font-size: 8px; color: var(--ink-faint); letter-spacing: 0.08em; margin-top:2px; }
+  .dial-label{ font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
 
   .meta-strip{
-    display:grid; grid-template-columns: repeat(6, 1fr);
+    display:grid; grid-template-columns: repeat(3, 1fr);
     border-radius: 12px; overflow:hidden; border: 1px solid var(--line);
   }
-  .meta-cell{ padding: 14px 16px; border-right: 1px solid var(--line); }
-  .meta-cell:last-child{ border-right: none; }
-  .meta-cell b{ display:block; font-family: var(--font-mono); font-size: 17px; color: var(--ink); margin-bottom: 2px; }
-  .meta-cell span{ font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; }
-  @media (max-width: 900px){ .meta-strip{ grid-template-columns: repeat(3, 1fr); } .meta-cell:nth-child(3){ border-right:none; } }
-  @media (max-width: 560px){ .meta-strip{ grid-template-columns: repeat(2, 1fr); } .meta-cell:nth-child(3){ border-right: 1px solid var(--line); } .meta-cell:nth-child(2n){ border-right: none; } }
+  .meta-cell{ padding: 12px 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .meta-cell:nth-child(3n){ border-right: none; }
+  .meta-cell b{ display:block; font-family: var(--font-mono); font-size: 16px; color: var(--ink); margin-bottom: 2px; }
+  .meta-cell span{ font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; }
+  @media (min-width: 640px){
+    .meta-strip{ grid-template-columns: repeat(6, 1fr); }
+    .meta-cell{ border-bottom: none; }
+    .meta-cell:nth-child(3n){ border-right: 1px solid var(--line); }
+    .meta-cell:last-child{ border-right: none; }
+  }
 
   .error-banner{
-    display:none; margin-top: 16px; padding: 13px 16px; border-radius: 10px;
-    background: color-mix(in srgb, var(--blast) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--blast) 40%, transparent);
-    color: var(--blast); font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6;
+    display:none; margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+    color: var(--danger); font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
   }
   .error-banner.show{ display:block; }
 
   /* TICKER */
   .ticker-band{
-    background: var(--ink); color: var(--void);
-    border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong);
-    overflow: hidden; padding: 11px 0;
+    background: var(--panel-2); color: var(--ink-dim);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    overflow: hidden; padding: 10px 0;
   }
   .ticker-track{
-    display:flex; width: max-content; gap: 36px;
+    display:flex; width: max-content; gap: 32px;
     animation: scroll 22s linear infinite;
-    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.03em; white-space: nowrap;
+    font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.03em; white-space: nowrap;
   }
-  .ticker-track b{ color: var(--coil); }
-  html[data-theme="light"] .ticker-track b{ color: var(--ember); }
+  .ticker-track b{ color: var(--amber); }
   @keyframes scroll{ from{ transform: translateX(0);} to{ transform: translateX(-50%);} }
 
   /* RESULTS */
-  section{ padding: 40px 0; }
-  .section-head{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: 22px; gap: 16px; flex-wrap: wrap; }
-  h2{ font-family: var(--font-display); font-weight: 700; font-size: clamp(22px, 2.6vw, 28px); margin:0; text-transform: uppercase; }
-  .legend-strip{ display:flex; gap: 16px; font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-dim); flex-wrap:wrap; }
+  section{ padding: 32px 0; }
+  .section-head{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: 18px; gap: 14px; flex-wrap: wrap; }
+  h2{ font-family: var(--font-display); font-weight: 700; font-size: clamp(18px, 3vw, 22px); margin:0; text-transform: uppercase; letter-spacing: 0.01em; }
+  .legend-strip{ display:flex; gap: 12px; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-dim); flex-wrap:wrap; }
   .legend-strip b{ color: var(--ink); }
 
   .card-grid{
-    display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 14px;
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
   }
   .empty-state{
-    padding: 60px 20px; text-align:center; color: var(--ink-faint);
-    font-family: var(--font-mono); font-size: 13px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
+    padding: 50px 20px; text-align:center; color: var(--ink-faint);
+    font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
   }
 
   .card{
-    background: var(--panel); border: 1px solid var(--line-strong); border-radius: 14px;
+    background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
     overflow:hidden; font-family: var(--font-mono);
     animation: cardIn .4s ease both;
   }
   @keyframes cardIn{ from{ opacity:0; transform: translateY(6px);} to{ opacity:1; transform: translateY(0);} }
-  .card-head{
-    display:flex; justify-content:space-between; align-items:center;
-    padding: 13px 16px; border-bottom: 1px solid var(--line);
-  }
-  .card-sym{ font-weight: 700; font-size: 14.5px; display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
-  .card-score{
-    font-weight: 700; font-size: 12.5px; padding: 3px 9px; border-radius: 6px;
-    display:flex; align-items:center; gap:6px; white-space:nowrap;
-  }
-  .score-blast{ background: var(--blast); color: #fff; }
-  .score-ember{ background: var(--ember); color: #1a0e02; }
-  .score-watch{ color: var(--coil); border: 1px solid var(--coil); }
-  .score-dim{ color: var(--ink-faint); border: 1px solid var(--line-strong); }
+  .card-head{ padding: 12px 15px 10px; border-bottom: 1px solid var(--line); }
+  .card-sym-row{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom: 9px; }
+  .card-sym{ font-weight: 700; font-size: 14px; display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
 
-  .card-body{ padding: 13px 16px; font-size: 12.5px; }
-  .card-price{ font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
-  .card-price .pct{ font-size: 12px; font-weight: 600; margin-left: 8px; }
-  .pct-up{ color: var(--green); } .pct-down{ color: var(--blast); }
+  /* CHARGE METER — signature score readout */
+  .charge-meter{ display:flex; align-items:center; gap: 8px; }
+  .charge-track{ flex:1; height: 5px; border-radius: 100px; background: var(--line-strong); overflow:hidden; }
+  .charge-fill{ height:100%; border-radius: 100px; transition: width .5s ease; }
+  .charge-fill.tier-blast{ background: var(--danger); }
+  .charge-fill.tier-ember{ background: var(--amber); }
+  .charge-fill.tier-watch{ background: var(--phosphor); }
+  .charge-fill.tier-dim{ background: var(--ink-faint); }
+  .charge-label{ font-size: 11px; font-weight:700; color: var(--ink); white-space:nowrap; }
+  .streak-badge{ font-size: 10px; color: var(--ink-faint); font-weight: 600; }
+
+  .card-body{ padding: 12px 15px 14px; font-size: 12px; }
+  .card-price{ font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+  .card-price .pct{ font-size: 11.5px; font-weight: 600; margin-left: 8px; }
+  .pct-up{ color: var(--phosphor); } .pct-down{ color: var(--danger); }
   .card-row{ display:flex; justify-content: space-between; padding: 3px 0; color: var(--ink-dim); }
   .card-row b{ color: var(--ink); font-weight: 600; }
   .card-reasons{
-    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
-    color: var(--ink-faint); font-size: 11px; line-height: 1.6;
+    margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--line);
+    color: var(--ink-faint); font-size: 10.5px; line-height: 1.6;
   }
 
   /* SPARKLINE */
   .spark-wrap{ position: relative; margin-bottom: 8px; }
-  .spark-canvas{ display:block; width:100%; height:44px; border-radius:8px; background:
-    linear-gradient(180deg, color-mix(in srgb, var(--coil) 5%, transparent), transparent); }
+  .spark-canvas{ display:block; width:100%; height:40px; border-radius:8px; background: var(--panel-2); }
 
-  .streak-badge{ font-size: 11px; color: var(--ink-faint); font-weight: 600; }
-
-  footer{ border-top: 1px solid var(--line); padding: 36px 0 30px; }
-  .footer-top{ display:flex; justify-content: space-between; align-items:center; flex-wrap: wrap; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
-  .footer-brand{ font-family: var(--font-mono); font-weight:700; font-size: 13px; }
-  .footer-fine{ font-size: 11.5px; line-height: 1.65; font-family: var(--font-mono); color: var(--ink-faint); max-width: 760px; }
+  footer{ border-top: 1px solid var(--line); padding: 30px 0 28px; }
+  .footer-top{ display:flex; justify-content: space-between; align-items:center; flex-wrap: wrap; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  .footer-brand{ font-family: var(--font-mono); font-weight:700; font-size: 12px; }
+  .footer-fine{ font-size: 11px; line-height: 1.65; font-family: var(--font-mono); color: var(--ink-faint); max-width: 760px; }
 
   @media (max-width: 700px){
-    .hero-top{ flex-direction: column; align-items: flex-start; }
-    .countdown{ text-align: left; }
+    .hero-top{ align-items: flex-start; }
   }
 </style>
 </head>
 <body>
 
+<div class="hazard"></div>
+
 <header class="nav">
   <div class="wrap nav-inner">
     <a href="#top" class="brand">
       <span class="brand-mark">B</span>
-      <span class="brand-name">BOMB_SCANNER<span>.live</span></span>
+      <span class="brand-name">Bomb Scanner<span>.live</span></span>
     </a>
     <div class="nav-right">
-      <div class="status-pill" id="statusPill"><span class="status-dot"></span><span id="statusText">Menyiapkan…</span></div>
+      <div class="status-pill" id="statusPill"><span class="status-dot"></span><span id="statusText">Initializing…</span></div>
       <button class="btn" id="scanNowBtn">⟳ Scan now</button>
       <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -259,22 +286,31 @@
     <div class="wrap">
       <div class="hero-top">
         <div>
-          <div class="eyebrow">Binance Futures · Live client-side fetch</div>
+          <div class="eyebrow">Binance Futures · Live client-side feed</div>
           <h1>Coiled energy, live.</h1>
         </div>
-        <div class="countdown">
-          <div class="countdown-label">Next scan</div>
-          <div class="countdown-value" id="countdownValue">--</div>
+        <div class="dial-block">
+          <div class="dial">
+            <svg class="dial-svg" viewBox="0 0 100 100">
+              <circle class="dial-track" cx="50" cy="50" r="42"/>
+              <circle class="dial-progress" id="dialProgress" cx="50" cy="50" r="42"/>
+            </svg>
+            <div class="dial-center">
+              <div class="dial-value" id="countdownValue">--</div>
+              <div class="dial-unit">SEC</div>
+            </div>
+          </div>
+          <div class="dial-label">Next<br>scan</div>
         </div>
       </div>
 
       <div class="meta-strip">
-        <div class="meta-cell"><b id="metaScanned">–</b><span>Ticker discan</span></div>
-        <div class="meta-cell"><b id="metaCandidates">–</b><span>Lolos filter</span></div>
-        <div class="meta-cell"><b id="metaShown">–</b><span>Ditampilkan</span></div>
-        <div class="meta-cell"><b id="metaTopScore">–</b><span>Skor tertinggi</span></div>
-        <div class="meta-cell"><b id="metaElapsed">–</b><span>Durasi scan</span></div>
-        <div class="meta-cell"><b id="metaUpdated">–</b><span>Update terakhir</span></div>
+        <div class="meta-cell"><b id="metaScanned">–</b><span>Tickers scanned</span></div>
+        <div class="meta-cell"><b id="metaCandidates">–</b><span>Passed filter</span></div>
+        <div class="meta-cell"><b id="metaShown">–</b><span>Shown</span></div>
+        <div class="meta-cell"><b id="metaTopScore">–</b><span>Top score</span></div>
+        <div class="meta-cell"><b id="metaElapsed">–</b><span>Scan duration</span></div>
+        <div class="meta-cell"><b id="metaUpdated">–</b><span>Last updated</span></div>
       </div>
 
       <div class="error-banner" id="errorBanner"></div>
@@ -282,23 +318,24 @@
   </section>
 
   <div class="ticker-band">
-    <div class="ticker-track" id="tickerTrack"><span>Menyiapkan koneksi ke Binance Futures API…</span></div>
+    <div class="ticker-track" id="tickerTrack"><span>Connecting to Binance Futures API…</span></div>
   </div>
 
   <section id="results">
     <div class="wrap">
       <div class="section-head">
-        <h2>Top kandidat</h2>
+        <h2>Top candidates</h2>
         <div class="legend-strip">
           <span>🔥 <b>≥60</b></span>
           <span>⚡ <b>≥40</b></span>
           <span>👀 <b>≥20</b></span>
-          <span>🔴SQZ=short-squeeze 🟢BUY=buyer-accum</span>
+          <span>🔴 SQZ = short squeeze</span>
+          <span>🟢 BUY = buyer accumulation</span>
           <span id="solidLine" style="display:none;">💥 <b id="solidSyms"></b></span>
         </div>
       </div>
       <div class="card-grid" id="cardGrid">
-        <div class="empty-state">Menunggu siklus scan pertama selesai…</div>
+        <div class="empty-state">Waiting for the first scan cycle to finish…</div>
       </div>
     </div>
   </section>
@@ -308,13 +345,13 @@
   <div class="wrap">
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
-      <span class="mono" style="font-size:11.5px; color:var(--ink-faint);">v3.1 · refresh 120s</span>
+      <span class="mono" style="font-size:11px; color:var(--ink-faint);">v3.1 · refresh 120s</span>
     </div>
     <p class="footer-fine">
-      Halaman ini fetch langsung ke Binance Futures API dari browser kamu — tidak ada
-      server perantara, tidak ada data yang disimpan. Sumber data 100% Binance Futures,
-      tanpa dependensi pihak ketiga. Ini alat baca data pasar dan penilaian skor, bukan
-      sinyal beli/jual dan bukan nasihat keuangan. Selalu riset sendiri sebelum ambil posisi.
+      This page fetches data directly from the Binance Futures API in your browser —
+      no middle server, nothing stored. 100% Binance Futures data, no third-party
+      dependencies. This is a market-data and scoring tool, not a buy/sell signal
+      and not financial advice. Always do your own research before taking a position.
     </p>
   </div>
 </footer>
@@ -323,7 +360,7 @@
 (function(){
   'use strict';
 
-  // ================= CONFIG (mirrors bomb_score.py v3.1 — disamakan persis) =================
+  // ================= CONFIG (mirrors bomb_score.py v3.1 — kept identical) =================
   const BASE = 'https://fapi.binance.com';
   const REFRESH_SEC = 120;
   const OI_MAX = 25_000_000;
@@ -347,7 +384,7 @@
   const OI_CHG_1H_HIGH = 10;
   const OI_CHG_1H_MID = 5;
 
-  // --- Composite Velocity (akselerasi harga NAIK + volume) ---
+  // --- Composite Velocity (upward price acceleration + volume) ---
   const VEL_PRICE_CANDLES = 3;
   const VEL_PRICE_HIGH = 1.0;
   const VEL_PRICE_MID = 0.5;
@@ -355,7 +392,7 @@
   const VEL_VOL_HIGH = 1.5;
   const VEL_VOL_MID = 1.2;
 
-  const KLINE_FULL_LIMIT = 168; // 7 hari candle 1h
+  const KLINE_FULL_LIMIT = 168; // 7 days of 1h candles
   const SQUEEZE_MEDIAN_FACTOR = 0.8;
 
   const SOLID_SQUEEZE_MIN = 4;
@@ -378,14 +415,17 @@
   const statusPill = $('statusPill');
   const statusText = $('statusText');
   const countdownValue = $('countdownValue');
+  const dialProgress = $('dialProgress');
   const errorBanner = $('errorBanner');
   const cardGrid = $('cardGrid');
   const tickerTrack = $('tickerTrack');
   const solidLine = $('solidLine');
   const solidSyms = $('solidSyms');
 
+  const DIAL_CIRC = 2 * Math.PI * 42; // matches r=42 on the dial circle
+
   let lastShown = [];   // for hysteresis, array of symbols
-  let streaks = {};     // symbol -> berapa siklus berturut-turut tampil
+  let streaks = {};     // symbol -> how many consecutive cycles it's been shown
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
   let tradfiCache = { symbols: new Set(), ts: 0 };
@@ -435,10 +475,10 @@
     return s;
   }
   function scoreClass(score){
-    if (score >= 60) return 'score-blast';
-    if (score >= 40) return 'score-ember';
-    if (score >= 20) return 'score-watch';
-    return 'score-dim';
+    if (score >= 60) return 'tier-blast';
+    if (score >= 40) return 'tier-ember';
+    if (score >= 20) return 'tier-watch';
+    return 'tier-dim';
   }
   function scoreTag(score){
     if (score >= 60) return '🔥';
@@ -447,7 +487,7 @@
     return '·';
   }
 
-  // ================= TradFi filter (klasifikasi resmi Binance) =================
+  // ================= TradFi filter (official Binance classification) =================
   async function getTradfiSymbols(){
     const now = Date.now();
     if (tradfiCache.symbols.size && (now - tradfiCache.ts) < TRADFI_CACHE_TTL_MS){
@@ -461,11 +501,11 @@
       tradfiCache = { symbols: syms, ts: now };
       return syms;
     }catch(e){
-      return tradfiCache.symbols; // fallback ke cache lama kalau fetch gagal
+      return tradfiCache.symbols; // fall back to old cache if fetch fails
     }
   }
 
-  // ================= core scan logic (ports bomb_score.py v3.1, identik) =================
+  // ================= core scan logic (ports bomb_score.py v3.1, identical) =================
 
   function computeBBSqueeze(closes, n){
     n = n || 20;
@@ -489,7 +529,7 @@
     return { bbWidth: widths[widths.length-1], squeezeLen };
   }
 
-  // Composite Velocity: akselerasi harga NAIK + volume ramp (max 18)
+  // Composite Velocity: upward price acceleration + volume ramp (max 18)
   function computeVelocity(closes, vols){
     let score = 0;
     const reasons = [];
@@ -497,13 +537,13 @@
     if (closes.length >= VEL_PRICE_CANDLES + 2 && closes[closes.length - (VEL_PRICE_CANDLES + 2)]){
       const base = closes[closes.length - (VEL_PRICE_CANDLES + 2)];
       const priceVel = (closes[closes.length-2] - base) / base * 100 / VEL_PRICE_CANDLES;
-      if (priceVel >= VEL_PRICE_HIGH){ score += 9; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/j'); }
-      else if (priceVel >= VEL_PRICE_MID){ score += 5; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/j'); }
+      if (priceVel >= VEL_PRICE_HIGH){ score += 9; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
+      else if (priceVel >= VEL_PRICE_MID){ score += 5; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
     }
 
     const win = VEL_VOL_CANDLES;
     if (vols.length >= win * 2 + 1){
-      const recent = vols.slice(-(win+1), -1).reduce((a,b)=>a+b,0) / win;   // skip candle in-progress
+      const recent = vols.slice(-(win+1), -1).reduce((a,b)=>a+b,0) / win;   // skip in-progress candle
       const prior = vols.slice(-(win*2+1), -(win+1)).reduce((a,b)=>a+b,0) / win;
       if (prior > 0){
         const volRamp = recent / prior;
@@ -515,13 +555,13 @@
     return { score, reasons };
   }
 
-  // Tag visual: bedain short-squeeze vs buyer-accumulation
+  // Visual tag: distinguish short-squeeze vs buyer-accumulation setups
   function classifySetup(fr, takerRatio){
     if (takerRatio === null || takerRatio === undefined || takerRatio < SETUP_TAKER_MIN) return '';
     return fr < 0 ? '🔴SQZ' : '🟢BUY';
   }
 
-  // ================= sparkline (mini chart harga per card) =================
+  // ================= sparkline (mini price chart per card) =================
   function drawSparkline(canvas, closes){
     if (!canvas || !closes || closes.length < 2) return;
     const dpr = window.devicePixelRatio || 1;
@@ -542,23 +582,23 @@
       return [x, y];
     });
 
-    // warna ikut trend keseluruhan
+    // color follows overall trend
     const upTrend = closes[closes.length-1] >= closes[0];
-    const lineColor = upTrend ? '#4ADE80' : '#FF4D6A';
+    const lineColor = upTrend ? '#4CFFB0' : '#FF4141';
 
-    // area gradient fill
+    // gradient fill area
     ctx.beginPath();
     ctx.moveTo(pts[0][0], h - padY);
     pts.forEach(p => ctx.lineTo(p[0], p[1]));
     ctx.lineTo(pts[pts.length-1][0], h - padY);
     ctx.closePath();
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, upTrend ? 'rgba(74,222,128,0.22)' : 'rgba(255,77,106,0.22)');
-    grad.addColorStop(1, upTrend ? 'rgba(74,222,128,0)' : 'rgba(255,77,106,0)');
+    grad.addColorStop(0, upTrend ? 'rgba(76,255,176,0.22)' : 'rgba(255,65,65,0.22)');
+    grad.addColorStop(1, upTrend ? 'rgba(76,255,176,0)' : 'rgba(255,65,65,0)');
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // garis utama
+    // main line
     ctx.beginPath();
     pts.forEach((p,i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));
     ctx.strokeStyle = lineColor;
@@ -567,7 +607,7 @@
     ctx.lineCap = 'round';
     ctx.stroke();
 
-    // titik harga terakhir (glow)
+    // last price dot (glow)
     const last = pts[pts.length-1];
     ctx.save();
     ctx.shadowColor = lineColor;
@@ -744,7 +784,7 @@
         else if (volSpike >= 2){ score += 12; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
         else if (volSpike >= 1.5){ score += 6; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
 
-        // --- Compression: BB width + durasi squeeze (max 22) ---
+        // --- Compression: BB width + squeeze duration (max 22) ---
         if (bbWidth && bbWidth < 5){ score += 12; reasons.push('BB ' + bbWidth.toFixed(1) + '%'); }
         else if (bbWidth && bbWidth < 8){ score += 6; reasons.push('BB ' + bbWidth.toFixed(1) + '%'); }
 
@@ -778,7 +818,7 @@
           if (oiChg4h !== null && oiChg1h > 0 && oiChg4h > 0){ score += 6; reasons.push('OI4h+' + oiChg4h.toFixed(0) + '%'); }
         }
 
-        // --- Composite Velocity: akselerasi harga naik + volume (max 18) ---
+        // --- Composite Velocity: upward price acceleration + volume (max 18) ---
         const velRes = computeVelocity(closes, vols);
         score += velRes.score;
         velRes.reasons.forEach(r => reasons.push(r));
@@ -790,7 +830,7 @@
         if (volOi >= 50){ score += 5; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
         else if (volOi >= 20){ score += 3; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
 
-        // --- Gate thesis inti: coiled energy, bukan momentum yg udah jalan ---
+        // --- Core thesis gate: coiled energy, not momentum that's already running ---
         const hasCompression = squeezeLen >= 2;
         const hasAccumulation = oiChg1h !== null && oiChg1h > 0;
         if (!hasCompression && !hasAccumulation){
@@ -806,7 +846,7 @@
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
-          closesSeries: closes.slice(-48), // 48 candle 1h terakhir utk sparkline
+          closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
         });
       }catch(e){ continue; }
@@ -819,7 +859,7 @@
   // ================= render =================
   function renderCards(shown){
     if (!shown.length){
-      cardGrid.innerHTML = '<div class="empty-state">Tidak ada kandidat lolos filter pada siklus ini — normal saat pasar sepi/volatil ekstrem.</div>';
+      cardGrid.innerHTML = '<div class="empty-state">No candidates passed the filter this cycle — normal during quiet or extremely volatile markets.</div>';
       solidLine.style.display = 'none';
       return;
     }
@@ -833,11 +873,17 @@
       const streak = streaks[r.sym] || 1;
       const streakBadge = streak >= 2 ? ' <span class="streak-badge">🔁x' + streak + '</span>' : '';
       const tagStr = r.setupTag ? (' ' + r.setupTag) : '';
+      const chargePct = Math.max(0, Math.min(100, Math.round(r.score / MAX_SCORE_THEORETICAL * 100)));
       return '' +
         '<div class="card">' +
           '<div class="card-head">' +
-            '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + '</div>' +
-            '<div class="card-score ' + scoreClass(r.score) + '">' + scoreTag(r.score) + ' ' + r.score + streakBadge + '</div>' +
+            '<div class="card-sym-row">' +
+              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + '</div>' +
+            '</div>' +
+            '<div class="charge-meter">' +
+              '<div class="charge-track"><div class="charge-fill ' + scoreClass(r.score) + '" style="width:' + chargePct + '%"></div></div>' +
+              '<div class="charge-label">' + scoreTag(r.score) + ' ' + r.score + streakBadge + '</div>' +
+            '</div>' +
           '</div>' +
           '<div class="card-body">' +
             '<div class="card-price">' + fmtPrice(r.price) + '<span class="pct ' + pctClass + '">' + (r.pct24>=0?'+':'') + r.pct24.toFixed(2) + '% 24h</span></div>' +
@@ -856,7 +902,7 @@
         '</div>';
     }).join('');
 
-    // gambar sparkline utk tiap card (data closesSeries sudah disimpan saat scan)
+    // draw sparkline for each card (closesSeries was captured during scan)
     shown.forEach(function(r){
       var cv = document.querySelector('.spark-canvas[data-sym="' + r.sym.replace(/[^A-Z0-9]/g,'') + '"]');
       if (cv && r.closesSeries && r.closesSeries.length >= 2){
@@ -911,9 +957,9 @@
       $('metaScanned').textContent = scannedCount;
       $('metaCandidates').textContent = candidateCount;
       $('metaShown').textContent = shown.length;
-      $('metaTopScore').textContent = shown.length ? shown[0].score : '–';
+      $('metaTopScore').textContent = shown.length ? (shown[0].score + '/' + MAX_SCORE_THEORETICAL) : '–';
       $('metaElapsed').textContent = elapsed + 's';
-      $('metaUpdated').textContent = new Date().toLocaleTimeString('id-ID', { hour12: false });
+      $('metaUpdated').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
 
       setTicker([
         'SCANNED <b>' + scannedCount + '</b>',
@@ -927,8 +973,8 @@
       setStatus('live', 'Live');
     }catch(e){
       console.error(e);
-      showError('Gagal fetch data dari Binance (' + (e.message || 'unknown error') + '). Kemungkinan CORS/rate-limit/koneksi. Retry otomatis di siklus berikutnya.');
-      setStatus('error', 'Error — retry berikutnya');
+      showError('Failed to fetch data from Binance (' + (e.message || 'unknown error') + '). Likely CORS, rate-limit, or a connection issue. Will retry automatically next cycle.');
+      setStatus('error', 'Error — retrying next cycle');
     }finally{
       scanning = false;
       $('scanNowBtn').disabled = false;
@@ -939,12 +985,14 @@
   function tickCountdown(){
     secondsLeft -= 1;
     if (secondsLeft <= 0){
-      countdownValue.textContent = '0s';
+      countdownValue.textContent = '0';
+      dialProgress.style.strokeDashoffset = DIAL_CIRC;
       runCycle();
       return;
     }
-    countdownValue.textContent = secondsLeft + 's';
-    countdownValue.classList.toggle('tick', secondsLeft <= 5);
+    countdownValue.textContent = secondsLeft;
+    dialProgress.style.strokeDashoffset = DIAL_CIRC * (1 - secondsLeft / REFRESH_SEC);
+    dialProgress.classList.toggle('tick', secondsLeft <= 5);
   }
 
   $('scanNowBtn').addEventListener('click', function(){ secondsLeft = 1; });
@@ -964,12 +1012,12 @@
   function initTelegram(){
     try{
       const tg = window.Telegram && window.Telegram.WebApp;
-      if (!tg) return; // dibuka di browser biasa, bukan di dalam Telegram — skip aja
+      if (!tg) return; // opened in a regular browser, not inside Telegram — skip
 
       tg.ready();
-      tg.expand(); // full-screen di dalam Telegram
+      tg.expand(); // full-screen inside Telegram
 
-      // Sinkron tema dengan tema Telegram user (dark/light)
+      // Sync theme with the user's Telegram theme (dark/light)
       function syncTheme(){
         const scheme = tg.colorScheme === 'light' ? 'light' : 'dark';
         setTheme(scheme);
@@ -977,15 +1025,15 @@
       syncTheme();
       tg.onEvent('themeChanged', syncTheme);
 
-      // Warna header bar Telegram ikut warna void kita
+      // Telegram header/background bar follows our void color
       if (tg.setHeaderColor) {
-        try{ tg.setHeaderColor(tg.colorScheme === 'light' ? '#EEF1EF' : '#0A0E14'); }catch(e){}
+        try{ tg.setHeaderColor(tg.colorScheme === 'light' ? '#F0EFE9' : '#0B0D10'); }catch(e){}
       }
       if (tg.setBackgroundColor) {
-        try{ tg.setBackgroundColor(tg.colorScheme === 'light' ? '#EEF1EF' : '#0A0E14'); }catch(e){}
+        try{ tg.setBackgroundColor(tg.colorScheme === 'light' ? '#F0EFE9' : '#0B0D10'); }catch(e){}
       }
 
-      // Sembunyikan theme-toggle manual karena tema udah ngikut Telegram otomatis
+      // Hide the manual theme toggle since theme now follows Telegram automatically
       const themeToggleBtn = $('themeToggle');
       if (themeToggleBtn) themeToggleBtn.style.display = 'none';
 
@@ -1000,4 +1048,3 @@
 
 </body>
 </html>
-
