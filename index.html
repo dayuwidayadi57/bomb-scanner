@@ -1338,12 +1338,26 @@
   }
 
   // ================= Monetag ads (passive, timer-based — decoupled from the 120s scan cycle) =================
+  const OWNER_TG_USER_ID = 7921579982; // your Telegram user ID — ads never trigger for this account,
+                                        // on any device or platform, since it's checked via
+                                        // Telegram.WebApp.initDataUnsafe.user.id (not device storage).
+  function isOwnerSession(){
+    try{
+      const tg = window.Telegram && window.Telegram.WebApp;
+      const uid = tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id;
+      return uid === OWNER_TG_USER_ID;
+    }catch(e){ return false; }
+  }
+
   function initAds(){
-    // Owner/dev bypass — run `localStorage.setItem('bsc_no_ads','1')` once in this browser's
-    // console (on your own phone/device) to permanently exclude THIS device from ever
-    // triggering ads. Prevents your own monitoring sessions from counting as ad traffic,
-    // which ad networks like Monetag treat as invalid/self-generated traffic and can suspend
-    // accounts for. To re-enable on this device: localStorage.removeItem('bsc_no_ads').
+    // Primary bypass: your Telegram account, detected via initDataUnsafe — works on every
+    // device/platform (phone, desktop Telegram, etc.) with zero manual setup per device.
+    if (isOwnerSession()) return;
+
+    // Secondary bypass for testing OUTSIDE Telegram (plain Chrome/browser, where
+    // Telegram.WebApp doesn't exist so initDataUnsafe isn't available): run
+    // `localStorage.setItem('bsc_no_ads','1')` once in that browser's console.
+    // To re-enable on that browser: localStorage.removeItem('bsc_no_ads').
     if (localStorage.getItem('bsc_no_ads') === '1') return;
 
     // show_11668237 is the global function injected by the Monetag SDK script tag in <head>.
