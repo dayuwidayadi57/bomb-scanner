@@ -13,6 +13,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFB020' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='13' cy='14' r='6' fill='%230B0D10' stroke='%23FFB020'/><path d='M16.5 10.5 21 6'/><path d='M19 4 21 6 19 8'/><path d='M11.5 8 10 6'/><circle cx='9.5' cy='5.5' r='.7' fill='%23FFB020' stroke='none'/></svg>">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!-- Monetag SDK (Telegram Mini App ads) — zone: BomScannerBot / 11668237 -->
+<script src='//libtl.com/sdk.js' data-zone='11668237' data-sdk='show_11668237'></script>
 <style>
   :root{
     --void: #0B0D10;
@@ -264,10 +266,29 @@
   .sort-dir .arrow{ font-size: 12px; line-height: 1; }
 
   .card-grid{
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
+  }
   .empty-state{
+    grid-column: 1 / -1;
     padding: 50px 20px; text-align:center; color: var(--ink-faint);
     font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
   }
+
+  /* SPONSORED SLOT — static ad card, always last, never touched by re-render */
+  .ad-slot{
+    grid-column: 1 / -1;
+    background: var(--panel); border: 1px dashed var(--line-strong); border-radius: var(--radius);
+    padding: 14px 16px; font-family: var(--font-mono); font-size: 12px;
+    display:flex; align-items:center; justify-content:space-between; gap: 12px; flex-wrap: wrap;
+    color: var(--ink-dim);
+  }
+  .ad-slot .ad-tag{
+    font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint);
+    border: 1px solid var(--line-strong); border-radius: 100px; padding: 2px 8px; flex-shrink:0;
+  }
+  .ad-slot .ad-body{ flex:1; min-width: 160px; }
+  .ad-slot a{ color: var(--amber); text-decoration: none; font-weight:600; }
+  .ad-slot a:hover{ text-decoration: underline; }
 
   .card{
     background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius);
@@ -412,6 +433,11 @@
       </div>
       <div class="card-grid" id="cardGrid">
         <div class="empty-state">Waiting for the first scan cycle to finish…</div>
+      </div>
+      <!-- Sponsored slot: lives outside #cardGrid so it survives every renderCards() refresh -->
+      <div class="ad-slot" id="adSlot">
+        <span class="ad-tag">Sponsored</span>
+        <div class="ad-body">Slot iklan — <a href="#" id="adSlotLink">isi link/copy di sini</a></div>
       </div>
     </div>
   </section>
@@ -1316,9 +1342,31 @@
     }catch(e){ console.warn('Telegram WebApp init skipped:', e); }
   }
 
+  // ================= Monetag ads (passive, timer-based — decoupled from the 120s scan cycle) =================
+  function initAds(){
+    // show_11668237 is the global function injected by the Monetag SDK script tag in <head>.
+    // Settings below are the exact defaults from the Monetag dashboard for this zone
+    // (Activate → In-App Interstitial): 2 ads per 6-minute session window, 30s apart,
+    // 5s delay before the first one, session persists across our own re-renders.
+    // Safe-guard with typeof check in case the script fails to load (network block, ad-blocker, etc).
+    if (typeof show_11668237 === 'function') {
+      show_11668237({
+        type: 'inApp',
+        inAppSettings: {
+          frequency: 2,
+          capping: 0.1,
+          interval: 30,
+          timeout: 5,
+          everyPage: false
+        }
+      });
+    }
+  }
+
   // ================= boot =================
   paintSortBar();
   initTelegram();
+  initAds();
   runCycle();
   pollBigPairs();
   setInterval(pollBigPairs, 6000);
