@@ -202,6 +202,12 @@
   .ticker-track b{ color: var(--amber); }
   .tick-up{ color: var(--phosphor); font-weight: 600; }
   .tick-dn{ color: var(--danger); font-weight: 600; }
+  .tick-tag{
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em;
+    padding: 1px 5px; border-radius: 4px; margin-right: 2px;
+    background: var(--amber-dim); color: var(--amber);
+    vertical-align: 1px;
+  }
   @keyframes scroll{ from{ transform: translateX(0);} to{ transform: translateX(-50%);} }
 
   /* RESULTS */
@@ -227,7 +233,7 @@
   }
   .sort-bar.center{
     flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; gap: 8px;
+    text-align: center; gap: 6px;
   }
   .sort-bar.center .sort-chips{
     display:flex; flex-wrap: wrap; justify-content: center; gap: 8px;
@@ -398,11 +404,11 @@
           <button class="sort-chip"        data-sort="volSpike" title="Volume multiple vs average">💥 Vol spike</button>
           <button class="sort-chip"        data-sort="oiChg1h" title="Open interest change 1 hour">💰 OI Δ 1h</button>
           <button class="sort-chip"        data-sort="squeezeLen" title="Hours of volatility squeeze">⏳ Squeeze</button>
-          <button class="sort-dir" id="sortDirBtn" title="Toggle sort direction" aria-label="Toggle sort direction">
-            <span class="arrow" id="sortDirArrow">↓</span>
-            <span id="sortDirLabel">High → Low</span>
-          </button>
         </div>
+        <button class="sort-dir" id="sortDirBtn" title="Toggle sort direction" aria-label="Toggle sort direction">
+          <span class="arrow" id="sortDirArrow">↓</span>
+          <span id="sortDirLabel">High → Low</span>
+        </button>
       </div>
       <div class="card-grid" id="cardGrid">
         <div class="empty-state">Waiting for the first scan cycle to finish…</div>
@@ -493,6 +499,8 @@
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
   let tradfiCache = { symbols: new Set(), ts: 0 };
+  let topMoverSym = null; // today's top % gainer (USDT-M futures, volume-filtered)
+  let topLoserSym = null; // today's top % loser (USDT-M futures, volume-filtered)
 
   // ================= helpers =================
   async function fetchJSON(url){
@@ -771,6 +779,24 @@
     tickerArr.forEach(t => { if (t.symbol.endsWith('USDT')) tickers[t.symbol] = t; });
     const fundingMap = {};
     (fundingArr || []).forEach(f => { fundingMap[f.symbol] = f; });
+
+    // Top mover / top loser today — from the FULL list (not the squeeze
+    // candidates, which deliberately exclude anything already up/down >5%)
+    {
+      let bestGainPct = -Infinity, bestLossPct = Infinity;
+      let bestGainSym = null, bestLossSym = null;
+      for (const sym in tickers){
+        if (STABLE_BLACKLIST.has(sym)) continue;
+        const tk = tickers[sym];
+        const qv = parseFloat(tk.quoteVolume);
+        const pct = parseFloat(tk.priceChangePercent);
+        if (!isFinite(pct) || !isFinite(qv) || qv < VOL_MIN) continue;
+        if (pct > bestGainPct){ bestGainPct = pct; bestGainSym = sym; }
+        if (pct < bestLossPct){ bestLossPct = pct; bestLossSym = sym; }
+      }
+      topMoverSym = bestGainSym;
+      topLoserSym = bestLossSym;
+    }
 
     const tradfiSyms = await getTradfiSymbols();
 
@@ -1062,21 +1088,36 @@
     tickerTrack.innerHTML = loop.split('·').map(s => '<span>' + s.trim() + '</span>').join('<span>·</span>');
   }
 
-  function fmtPriceTick(n){ if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 }); if (n >= 1) return n.toFixed(2); return n.toFixed(4); }
+  function fmtPriceTick(n){
+    if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (n >= 1) return n.toFixed(2);
+    // sub-$1 (incl. sub-cent meme coins): match fmtPrice's precision so a
+    // small top-mover/loser price never collapses to a misleading "0.0000"
+    let s = n.toFixed(8);
+    s = s.replace(/0+$/,'').replace(/\.$/,'');
+    return s;
+  }
   function fmtPctTick(n){ const v = parseFloat(n); const sign = v >= 0 ? '+' : '−'; const cls = v >= 0 ? 'tick-up' : 'tick-dn'; const abs = Math.abs(v).toFixed(2); return '<span class="tick-pct ' + cls + '">' + sign + abs + '%</span>'; }
 
-  // live BTCUSDT & ETHUSDT ticker — independent poll every 6s
+  // live BTCUSDT & ETHUSDT + top mover/loser ticker — independent poll every 6s
   async function pollBigPairs(){
     try {
-      const [btcRes, ethRes] = await Promise.all([
-        fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=BTCUSDT'),
-        fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=ETHUSDT')
-      ]);
-      const items = [btcRes, ethRes].filter(Boolean).map(t => {
+      const syms = ['BTCUSDT', 'ETHUSDT'];
+      if (topMoverSym && !syms.includes(topMoverSym)) syms.push(topMoverSym);
+      if (topLoserSym && !syms.includes(topLoserSym)) syms.push(topLoserSym);
+
+      const results = await Promise.all(
+        syms.map(s => fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=' + s))
+      );
+
+      const items = results.filter(Boolean).map(t => {
         const px = parseFloat(t.lastPrice);
         const pct = parseFloat(t.priceChangePercent);
         const base = String(t.symbol || '').replace('USDT','');
-        return '<b>' + base + '</b> $' + fmtPriceTick(px) + ' ' + fmtPctTick(pct);
+        let tag = '';
+        if (t.symbol === topMoverSym) tag = '<span class="tick-tag">🚀 MOVER</span> ';
+        else if (t.symbol === topLoserSym) tag = '<span class="tick-tag">🩸 LOSER</span> ';
+        return tag + '<b>' + base + '</b> $' + fmtPriceTick(px) + ' ' + fmtPctTick(pct);
       });
       if (items.length) setTicker(items);
     } catch(e){ /* silent — keep last good ticker */ }
@@ -1115,7 +1156,7 @@
       $('metaElapsed').textContent = elapsed + 's';
       $('metaUpdated').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
 
-      // ticker band now driven by pollBigPairs() — BTC & ETH live prices
+      // ticker band now driven by pollBigPairs() — BTC, ETH, top mover & top loser live prices
 
       setStatus('live', 'Live');
     }catch(e){
