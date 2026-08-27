@@ -464,6 +464,7 @@
   const OI_HIST_LIMIT = 49;
   const OI_CHG_1H_HIGH = 10;
   const OI_CHG_1H_MID = 5;
+  const OI_CHG_4H_MIN = 3;   // minimum Δ4h to qualify as sustained accumulation
 
   // --- Composite Velocity (upward price acceleration + volume) ---
   const VEL_PRICE_CANDLES = 3;
@@ -492,7 +493,7 @@
   // --- Setup Type Tag ---
   const SETUP_TAKER_MIN = 1.2;
 
-  const MAX_SCORE_THEORETICAL = 115; // VolSpike20 + BB/Sqz22 + FR/Taker25 + OI-RoC20 + Range/VolOI10 + Velocity18
+  const MAX_SCORE_THEORETICAL = 111; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18
 
   const TRADFI_CACHE_TTL_MS = 6 * 3600 * 1000;
 
@@ -934,16 +935,44 @@
           else if (tr < TAKER_RATIO_PENALTY){ score -= 5; reasons.push('TkrSell ' + tr.toFixed(2)); }
         }
 
-        // --- Accumulation: OI rate-of-change (max 20) ---
-        if (oiChg1h !== null){
-          if (oiChg1h >= OI_CHG_1H_HIGH){ score += 14; reasons.push('OI1h+' + oiChg1h.toFixed(0) + '%'); }
-          else if (oiChg1h >= OI_CHG_1H_MID){ score += 8; reasons.push('OI1h+' + oiChg1h.toFixed(0) + '%'); }
-          else if (oiChg1h <= -OI_CHG_1H_MID){ score -= 8; reasons.push('OI1h' + oiChg1h.toFixed(0) + '%'); }
+        // --- Accumulation: multi-timeframe confluent ΔOI (max ~16) ---
+        // v3.3: replaced double-stack with confluent tiers — no more double-counting.
+        // Δ4hr now acts as a gate/amplifier for Δ1hr signal, not a separate adder.
+        const hasSustainedOI = oiChg4h !== null && oiChg4h >= OI_CHG_4H_MIN;
 
-          if (oiChg4h !== null && oiChg1h > 0 && oiChg4h > 0){ score += 6; reasons.push('OI4h+' + oiChg4h.toFixed(0) + '%'); }
+        // --- Positive ΔOI: confluent tiers ---
+        if (hasSustainedOI){
+          // Both timeframes confirm demand inflow — sustained accumulation
+          let pts = 0, label = '';
+          if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_HIGH){
+            pts = 16; label = 'OI Strong ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          } else if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_MID){
+            pts = 10; label = 'OI Conf ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          }
+          if (pts){ score += pts; reasons.push(label); }
+        } else {
+          // Short-term only — lower confidence without Δ4hr confirmation
+          let stPts = 0, stLabel = '';
+          if (oiUsd && qv > VOL_MIN_FULL){
+            if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_HIGH){
+              stPts = 6; stLabel = 'OI ST ' + oiChg1h.toFixed(0) + '%';
+            } else if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_MID){
+              stPts = 3; stLabel = 'OI ST ' + oiChg1h.toFixed(0) + '%';
+            }
+            if (stPts){ score += stPts; reasons.push(stLabel); }
+          }
         }
 
-        // --- Composite Velocity: upward price acceleration + volume (max 18) ---
+        // --- Negative ΔOI: position unwind / degen long liquidation risk ---
+        if (oiUsd && qv > VOL_MIN_FULL){
+          let negPts = 0, negLabel = '';
+          if (oiChg4h !== null && oiChg4h <= -OI_CHG_4H_MIN * 2 &&
+              oiChg1h !== null && oiChg1h <= -OI_CHG_1H_MID){
+            negPts = -8; negLabel = 'OI Degen ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          }
+          if (negPts){ score += negPts; reasons.push(negLabel); }
+        }
+
         const velRes = computeVelocity(closes, vols);
         score += velRes.score;
         velRes.reasons.forEach(r => reasons.push(r));
