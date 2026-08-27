@@ -200,6 +200,8 @@
     font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.03em; white-space: nowrap;
   }
   .ticker-track b{ color: var(--amber); }
+  .tick-up{ color: var(--phosphor); font-weight: 600; }
+  .tick-dn{ color: var(--danger); font-weight: 600; }
   @keyframes scroll{ from{ transform: translateX(0);} to{ transform: translateX(-50%);} }
 
   /* RESULTS */
@@ -1055,6 +1057,26 @@
     tickerTrack.innerHTML = loop.split('·').map(s => '<span>' + s.trim() + '</span>').join('<span>·</span>');
   }
 
+  function fmtPriceTick(n){ if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 }); if (n >= 1) return n.toFixed(2); return n.toFixed(4); }
+  function fmtPctTick(n){ const v = parseFloat(n); const sign = v >= 0 ? '+' : '−'; const cls = v >= 0 ? 'tick-up' : 'tick-dn'; const abs = Math.abs(v).toFixed(2); return '<span class="tick-pct ' + cls + '">' + sign + abs + '%</span>'; }
+
+  // live BTCUSDT & ETHUSDT ticker — independent poll every 6s
+  async function pollBigPairs(){
+    try {
+      const [btcRes, ethRes] = await Promise.all([
+        fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=BTCUSDT'),
+        fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=ETHUSDT')
+      ]);
+      const items = [btcRes, ethRes].filter(Boolean).map(t => {
+        const px = parseFloat(t.lastPrice);
+        const pct = parseFloat(t.priceChangePercent);
+        const base = String(t.symbol || '').replace('USDT','');
+        return '<b>' + base + '</b> $' + fmtPriceTick(px) + ' ' + fmtPctTick(pct);
+      });
+      if (items.length) setTicker(items);
+    } catch(e){ /* silent — keep last good ticker */ }
+  }
+
   function showError(msg){
     errorBanner.textContent = '[!] ' + msg;
     errorBanner.classList.add('show');
@@ -1088,14 +1110,7 @@
       $('metaElapsed').textContent = elapsed + 's';
       $('metaUpdated').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
 
-      setTicker([
-        'SCANNED <b>' + scannedCount + '</b>',
-        'CANDIDATES <b>' + candidateCount + '</b>',
-        'SHOWN <b>' + shown.length + '</b>',
-        'TOP SCORE <b>' + (shown.length ? shown[0].score : '–') + '</b> /' + MAX_SCORE_THEORETICAL,
-        'CYCLE <b>' + elapsed + 's</b>',
-        'NEXT REFRESH <b>' + REFRESH_SEC + 's</b>'
-      ]);
+      // ticker band now driven by pollBigPairs() — BTC & ETH live prices
 
       setStatus('live', 'Live');
     }catch(e){
@@ -1171,6 +1186,8 @@
   paintSortBar();
   initTelegram();
   runCycle();
+  pollBigPairs();
+  setInterval(pollBigPairs, 6000);
 })();
 </script>
 
