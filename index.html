@@ -206,10 +206,39 @@
   .legend-strip{ display:flex; gap: 12px; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-dim); flex-wrap:wrap; }
   .legend-strip b{ color: var(--ink); }
 
-  .card-grid{
-    display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 12px;
+  /* SORT BAR */
+  .sort-bar{
+    display:flex; align-items:center; gap: 8px; margin-bottom: 14px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+    flex-wrap: wrap;
   }
+  .sort-bar > .sort-label{ text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); font-size: 10.5px; }
+  .sort-chip{
+    display:inline-flex; align-items:center; gap: 5px;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--line-strong); background: var(--panel);
+    color: var(--ink-dim); cursor: pointer; user-select: none;
+    transition: background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease;
+    white-space: nowrap;
+  }
+  .sort-chip:hover{ color: var(--ink); border-color: var(--amber); }
+  .sort-chip:active{ transform: scale(.96); }
+  .sort-chip.active{
+    background: var(--amber-dim); color: var(--ink); border-color: var(--amber);
+  }
+  .sort-dir{
+    margin-left: auto;
+    display:inline-flex; align-items:center; gap: 5px;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--line-strong); background: var(--panel);
+    color: var(--ink-dim); cursor: pointer; user-select: none;
+    transition: background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease;
+  }
+  .sort-dir:hover{ color: var(--ink); border-color: var(--amber); }
+  .sort-dir:active{ transform: scale(.96); }
+  .sort-dir .arrow{ font-size: 12px; line-height: 1; }
+
+  .card-grid{
   .empty-state{
     padding: 50px 20px; text-align:center; color: var(--ink-faint);
     font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
@@ -342,6 +371,18 @@
           <span>🟢 BUY = buyer accumulation</span>
           <span id="solidLine" style="display:none;">💥 <b id="solidSyms"></b></span>
         </div>
+      <div class="sort-bar" role="toolbar" aria-label="Sort candidates">
+        <span class="sort-label">Sort by</span>
+        <button class="sort-chip active" data-sort="score"   title="Bomb score">🔥 Score</button>
+        <button class="sort-chip"        data-sort="pct24"   title="24-hour price change">📈 24h %</button>
+        <button class="sort-chip"        data-sort="bb"      title="Bollinger bandwidth, lower = tighter">📊 BB width</button>
+        <button class="sort-chip"        data-sort="volSpike" title="Volume multiple vs average">💥 Vol spike</button>
+        <button class="sort-chip"        data-sort="oiChg1h" title="Open interest change 1 hour">💰 OI Δ 1h</button>
+        <button class="sort-chip"        data-sort="squeezeLen" title="Hours of volatility squeeze">⏳ Squeeze</button>
+        <button class="sort-dir" id="sortDirBtn" title="Toggle sort direction" aria-label="Toggle sort direction">
+          <span class="arrow" id="sortDirArrow">↓</span>
+          <span id="sortDirLabel">High → Low</span>
+        </button>
       </div>
       <div class="card-grid" id="cardGrid">
         <div class="empty-state">Waiting for the first scan cycle to finish…</div>
@@ -864,6 +905,75 @@
     results.sort((a,b) => b.score - a.score);
     return { results: results, scannedCount: scannedCount, candidateCount: candidates.length };
   }
+  // ================= sort =================
+  // user-facing sort over the already-selected stable top N
+  const SORT_KEYS = {
+    score:       { label: 'Score',       get: r => (r.score ?? 0),        descDefault: true  },
+    pct24:       { label: '24h %',       get: r => (r.pct24 ?? 0),        descDefault: true  },
+    bb:          { label: 'BB width',    get: r => (r.bb ?? 999),         descDefault: false },
+    volSpike:    { label: 'Vol spike',   get: r => (r.volSpike ?? 0),     descDefault: true  },
+    oiChg1h:     { label: 'OI Δ 1h',     get: r => (r.oiChg1h ?? -1e9),   descDefault: true  },
+    squeezeLen:  { label: 'Squeeze',     get: r => (r.squeezeLen ?? 0),   descDefault: true  }
+  };
+  let sortKey = 'score';
+  let sortDir = 'desc'; // 'desc' | 'asc'
+  try {
+    const saved = JSON.parse(localStorage.getItem('bomb_sort_v1') || 'null');
+    if (saved && SORT_KEYS[saved.key]){ sortKey = saved.key; }
+    if (saved && (saved.dir === 'asc' || saved.dir === 'desc')){ sortDir = saved.dir; }
+  } catch(_){ /* ignore */ }
+
+  function sortShown(rows){
+    const def = SORT_KEYS[sortKey] || SORT_KEYS.score;
+    const sign = sortDir === 'asc' ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+      const va = def.get(a), vb = def.get(b);
+      if (va === vb) return (b.score - a.score); // tiebreaker = score desc
+      return (va < vb ? -1 : 1) * sign;
+    });
+  }
+
+  function paintSortBar(){
+    document.querySelectorAll('.sort-chip').forEach(el => {
+      el.classList.toggle('active', el.getAttribute('data-sort') === sortKey);
+    });
+    const arrow = $('sortDirArrow');
+    const label = $('sortDirLabel');
+    if (arrow) arrow.textContent = sortDir === 'desc' ? '↓' : '↑';
+    if (label) label.textContent = sortDir === 'desc' ? 'High → Low' : 'Low → High';
+  }
+  function saveSort(){
+    try { localStorage.setItem('bomb_sort_v1', JSON.stringify({ key: sortKey, dir: sortDir })); } catch(_){}
+  }
+
+  document.querySelectorAll('.sort-chip').forEach(el => {
+    el.addEventListener('click', function(){
+      const key = el.getAttribute('data-sort');
+      if (!SORT_KEYS[key]) return;
+      const def = SORT_KEYS[key];
+      // smart dir: if user re-picks same key toggle, else pick default dir for new key
+      if (key === sortKey){ sortDir = sortDir === 'desc' ? 'asc' : 'desc'; }
+      else { sortDir = def.descDefault ? 'desc' : 'asc'; }
+      sortKey = key;
+      paintSortBar();
+      saveSort();
+      applySort();
+    });
+  });
+  const sortDirBtnEl = $('sortDirBtn');
+  if (sortDirBtnEl){
+    sortDirBtnEl.addEventListener('click', function(){
+      sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+      paintSortBar();
+      saveSort();
+      applySort();
+    });
+  }
+
+  function applySort(){
+    if (!window.__bombLastShown || !window.__bombLastShown.length) return;
+    renderCards(sortShown(window.__bombLastShown));
+  }
 
   // ================= render =================
   function renderCards(shown){
@@ -960,7 +1070,8 @@
       const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
       lastShown = shown.map(r => r.sym);
       updateStreaks(lastShown);
-      renderCards(shown);
+      window.__bombLastShown = shown;
+      renderCards(sortShown(shown));
 
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       $('metaScanned').textContent = scannedCount;
@@ -1050,6 +1161,7 @@
   }
 
   // ================= boot =================
+  paintSortBar();
   initTelegram();
   runCycle();
 })();
