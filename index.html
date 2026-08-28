@@ -458,7 +458,7 @@
   <div class="wrap">
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
-      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.7 · User online: N/A</span>
+      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.8 · User online: N/A</span>
     </div>
     <div class="footer-bottom">
       <a href="https://x.com/AICoddingAgent" target="_blank" rel="noopener noreferrer" class="mono footer-x-link">
@@ -499,13 +499,15 @@
   const PCT_HARD_MAX = 60;       // beyond this: truly exhausted/late, still excluded
   const RANGE_SOFT_MAX = 15.0;
   const RANGE_HARD_MAX = 40.0;
-  const VOL_MIN_HARD = 1_500_000;   // absolute floor — below this, data too thin/noisy to score
-  const VOL_MIN_FULL = 10_000_000;  // below this: tag "MicroCap" (kept, not penalized — this is
-                                     // exactly the liquidity band where 100%+ moves tend to start)
+  const VOL_MIN_HARD = 5_000_000;    // absolute floor — below this, data too thin/noisy to score
+                                     // v3.8: raised from 1.5M → whale-level detection only
+                                     // coins below here are excluded entirely
+  const VOL_MIN_FULL = 25_000_000; // above this: full signal tier, no penalty
+                                     // between HARD and FULL: "MidCap" tag (signals still apply)
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v3.7'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v3.8'; // bump this on meaningful releases — shown in the footer
   const CONCURRENCY = 10;
   const REQ_TIMEOUT_MS = 30000;
 
@@ -1116,7 +1118,7 @@
           score = Math.round(score * 0.5);
           reasons.push('⚠️ Already moving (not pre-explosion)');
         }
-        const isMicroCap = qv < VOL_MIN_FULL;
+        const isMidCap = qv < VOL_MIN_FULL;
 
         const isSolid = (squeezeLen >= SOLID_SQUEEZE_MIN && oiChg1h !== null && oiChg1h > SOLID_OI_CHG_MIN &&
           (fr < 0 || (tr !== null && tr !== undefined && tr >= TAKER_RATIO_BOOST_HIGH)));
@@ -1127,7 +1129,7 @@
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
-          microCap: isMicroCap, alreadyMoving: alreadyMoving,
+          midCap: isMidCap, alreadyMoving: alreadyMoving,
           ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
@@ -1225,14 +1227,14 @@
       const streak = streaks[r.sym] || 1;
       const streakBadge = streak >= 2 ? ' <span class="streak-badge">🔁x' + streak + '</span>' : '';
       const tagStr = r.setupTag ? (' ' + r.setupTag) : '';
-      const microTag = r.microCap ? ' <span class="streak-badge" title="Below $10M 24h volume — thin liquidity, where explosive moves tend to start">🐣MicroCap</span>' : '';
+      const midTag = r.midCap ? ' <span class="streak-badge" title="$5M-$25M 24h volume — medium liquidity tier">🐣MidCap</span>' : '';
       const movingTag = r.alreadyMoving ? ' <span class="streak-badge" title="Already moved recently — no longer a pre-explosion coil">⚠️Moving</span>' : '';
       const chargePct = Math.max(0, Math.min(100, Math.round(r.score / MAX_SCORE_THEORETICAL * 100)));
       return '' +
         '<div class="card">' +
           '<div class="card-head">' +
             '<div class="card-sym-row">' +
-              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + microTag + movingTag + '</div>' +
+              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + midTag + movingTag + '</div>' +
             '</div>' +
             '<div class="charge-meter">' +
               '<div class="charge-track"><div class="charge-fill ' + scoreClass(r.score) + '" style="width:' + chargePct + '%"></div></div>' +
