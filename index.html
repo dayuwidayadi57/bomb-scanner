@@ -458,7 +458,7 @@
   <div class="wrap">
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
-      <span class="mono" style="font-size:11px; color:var(--ink-faint);">v3.1 · refresh 120s</span>
+      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.1 · User online: N/A</span>
     </div>
     <div class="footer-bottom">
       <a href="https://x.com/AICoddingAgent" target="_blank" rel="noopener noreferrer" class="mono footer-x-link">
@@ -560,6 +560,7 @@
   const tickerTrack = $('tickerTrack');
   const solidLine = $('solidLine');
   const solidSyms = $('solidSyms');
+  const onlineCountEl = $('onlineCount');
 
   const DIAL_CIRC = 2 * Math.PI * 42; // matches r=42 on the dial circle
 
@@ -1467,13 +1468,62 @@
     }
   }
 
+  // ================= presence (live "user online" counter) =================
+  // Hits our own /api/presence serverless function (Vercel + KV storage) with a
+  // per-tab session id every HEARTBEAT_MS. The backend keeps that id alive for
+  // PRESENCE_TTL_SECONDS (see /api/presence.js) and reports how many distinct
+  // ids are currently alive — that count is what's shown in the footer.
+  const PRESENCE_HEARTBEAT_MS = 20000; // must stay well under the backend TTL (45s)
+  function getSessionId(){
+    try{
+      let sid = sessionStorage.getItem('bsc_sid');
+      if (!sid){
+        sid = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2)));
+        sessionStorage.setItem('bsc_sid', sid);
+      }
+      return sid;
+    }catch(e){
+      // sessionStorage unavailable (e.g. private mode edge cases) — fall back to an in-memory id
+      return 'anon-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    }
+  }
+  const SESSION_ID = getSessionId();
+
+  async function pingPresence(){
+    if (!onlineCountEl) return;
+    try{
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+      let res;
+      try{
+        res = await fetch('/api/presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sid: SESSION_ID }),
+          signal: ctrl.signal
+        });
+      } finally {
+        clearTimeout(t);
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const n = (data && typeof data.online === 'number') ? data.online : null;
+      onlineCountEl.textContent = 'v3.1 · User online: ' + (n === null ? 'N/A' : n);
+    }catch(e){
+      // backend not deployed yet, KV not configured, or network hiccup — degrade quietly
+      onlineCountEl.textContent = 'v3.1 · User online: N/A';
+    }
+  }
+
   // ================= boot =================
   paintSortBar();
   initTelegram();
   initAds();
   runCycle();
   pollBigPairs();
+  pingPresence();
   setInterval(pollBigPairs, 6000);
+  setInterval(pingPresence, PRESENCE_HEARTBEAT_MS);
 })();
 </script>
 
