@@ -26,7 +26,13 @@ import { Redis } from '@upstash/redis';
 const redis = Redis.fromEnv();
 
 const BINANCE_ORIGIN = 'https://fapi.binance.com';
-const UPSTREAM_TIMEOUT_MS = 10000;
+// Vercel Hobby functions have a hard 10s execution cap. This fetch's own
+// timeout is deliberately well under that (not equal to it) — it needs to
+// leave room for the redis.mget() + pipeline.exec() calls that run AFTER
+// this fetch resolves. Setting it to 10000 would leave zero buffer and
+// risk the whole function getting killed by Vercel mid-Redis-write instead
+// of failing cleanly on its own terms.
+const UPSTREAM_TIMEOUT_MS = 6000;
 
 const HORIZONS = [
   { key: '1h', seconds: 3600 },

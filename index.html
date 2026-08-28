@@ -249,7 +249,7 @@
     display:flex; flex-wrap: wrap; justify-content: center; gap: 8px;
     width: 100%;
   }
-  .sort-chip{
+  .sort-chip, .perf-chip{
     display:inline-flex; align-items:center; gap: 5px;
     padding: 5px 10px; border-radius: 999px;
     border: 1px solid var(--line-strong); background: var(--panel);
@@ -257,9 +257,9 @@
     transition: background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease;
     white-space: nowrap;
   }
-  .sort-chip:hover{ color: var(--ink); border-color: var(--amber); }
-  .sort-chip:active{ transform: scale(.96); }
-  .sort-chip.active{
+  .sort-chip:hover, .perf-chip:hover{ color: var(--ink); border-color: var(--amber); }
+  .sort-chip:active, .perf-chip:active{ transform: scale(.96); }
+  .sort-chip.active, .perf-chip.active{
     background: var(--amber-dim); color: var(--ink); border-color: var(--amber);
   }
   .sort-dir{
@@ -496,9 +496,9 @@
         </div>
       </div>
       <div class="perf-toggle-bar" role="toolbar" aria-label="Performance horizon">
-        <button class="sort-chip" data-horizon="1h">1h</button>
-        <button class="sort-chip active" data-horizon="4h">4h</button>
-        <button class="sort-chip" data-horizon="24h">24h</button>
+        <button class="perf-chip" data-horizon="1h">1h</button>
+        <button class="perf-chip active" data-horizon="4h">4h</button>
+        <button class="perf-chip" data-horizon="24h">24h</button>
       </div>
       <div id="perfBody">
         <div class="perf-empty">Loading signal performance…</div>
@@ -511,7 +511,7 @@
   <div class="wrap">
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
-      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.7 · User online: N/A</span>
+      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v4.0 · User online: N/A</span>
     </div>
     <div class="footer-bottom">
       <a href="https://x.com/AICoddingAgent" target="_blank" rel="noopener noreferrer" class="mono footer-x-link">
@@ -558,7 +558,13 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v3.7'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v4.0'; // bump this on meaningful releases — shown in the footer
+  // v4.0: Signal Performance tracking — logs every fresh top-N entry
+  // (api/log-signal.js), evaluates peak gain + 1h/4h/24h checkpoints via a
+  // GitHub Actions-driven cron (api/evaluate-signals.js, since Vercel Hobby
+  // cron can't run sub-daily), and surfaces win-rate stats in a new
+  // dashboard panel (api/signal-stats.js). Purely additive — no scoring or
+  // selection logic changed.
   const CONCURRENCY = 10;
   const REQ_TIMEOUT_MS = 30000;
 
