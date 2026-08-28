@@ -1755,12 +1755,14 @@
     });
     html += '</div>';
 
-    if (perfData.recent && perfData.recent.length){
+    // Filter out Watch tier from recent table (too noisy)
+    const actionableRecent = perfData.recent.filter(r => r.tier !== 'watch');
+    if (actionableRecent && actionableRecent.length){
       html += '<div class="perf-table-wrap"><table class="perf-table"><thead><tr>' +
         '<th>Symbol</th><th>Tier</th><th>Score</th><th>🔁</th><th>🐣</th>' +
         '<th>Peak 1h</th><th>Peak 4h</th><th>Peak 24h</th><th>When</th>' +
       '</tr></thead><tbody>';
-      perfData.recent.forEach(function(r){
+      actionableRecent.forEach(function(r){
         const tierTxt = (r.premium ? '💎 ' : '') + (TIER_LABEL[r.tier] || r.tier);
         html += '<tr>' +
           '<td><b>' + r.sym + '</b></td>' +
