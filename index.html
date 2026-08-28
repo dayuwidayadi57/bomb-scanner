@@ -281,7 +281,6 @@
     padding: 50px 20px; text-align:center; color: var(--ink-faint);
     font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
   }
-  .empty-diag{ margin-top: 10px; font-size: 11px; opacity: 0.85; word-break: break-word; }
 
   /* SPONSORED SLOT — static ad card, always last, never touched by re-render */
   .ad-slot{
@@ -439,7 +438,6 @@
       <div class="meta-strip">
         <div class="meta-cell"><b id="metaScanned">–</b><span>Tickers scanned</span></div>
         <div class="meta-cell"><b id="metaCandidates">–</b><span>Passed filter</span></div>
-        <div class="meta-cell"><b id="metaGated">–</b><span>Gated (OI vs LONG)</span></div>
         <div class="meta-cell"><b id="metaShown">–</b><span>Shown</span></div>
         <div class="meta-cell"><b id="metaTopScore">–</b><span>Top score</span></div>
         <div class="meta-cell"><b id="metaElapsed">–</b><span>Scan duration</span></div>
@@ -460,9 +458,9 @@
       <div class="section-head center">
         <h2>Top candidates</h2>
         <div class="legend-strip">
-          <span>🔥 <b>≥50</b></span>
-          <span>⚡ <b>≥30</b></span>
-          <span>👀 <b>≥15</b></span>
+          <span>🔥 <b>≥60</b></span>
+          <span>⚡ <b>≥40</b></span>
+          <span>👀 <b>≥20</b></span>
           <span>🔴 SQZ = short squeeze</span>
           <span>🟢 BUY = buyer accumulation</span>
           <span id="solidLine" style="display:none;">💥 <b id="solidSyms"></b></span>
@@ -560,22 +558,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v5.5'; // bump this on meaningful releases — shown in the footer
-  // v5.5: OI-vs-price contradiction quadrant changed from a hard skip
-  // (candidate dropped from `results` entirely, `continue`) to a 0.25x
-  // soft penalty. Thresholds involved (OI_CHG_8H_MIN=3%, flat band=0.5%)
-  // are thin relative to 5m-data noise, so candidates were flipping
-  // quadrant and vanishing between 2-min scans — and once dropped from
-  // `results`, selectStableTop's incumbency protection couldn't help them.
-  // Now they stay scoreable/stability-eligible, just heavily handicapped.
-  // isSolid / isPremiumCandidate updated to explicitly exclude contradicted
-  // candidates, since they can now reach those checks.
-  // v5.0: full scoring redesign — 3 directional pillars (OI Flow / Funding /
-  // Velocity) + small direction-gated VolSpike bonus, replacing the old
-  // 7-component 116pt score where ~44% was direction-blind (VolSpike/BB/Range).
-  // OI Flow now hard-skips candidates where OI+price direction contradicts a
-  // LONG (shorts piling in, or longs capitulating) instead of just scoring
-  // them lower. BB/Range/EMA100/TkrDom kept as display-only tags.
+  const APP_VERSION = 'v4.0'; // bump this on meaningful releases — shown in the footer
   // v4.0: Signal Performance tracking — logs every fresh top-N entry
   // (api/log-signal.js), evaluates peak gain + 1h/4h/24h checkpoints via a
   // GitHub Actions-driven cron (api/evaluate-signals.js, since Vercel Hobby
@@ -591,72 +574,67 @@
   const TAKER_RATIO_BOOST_MID = 1.2;
   const TAKER_RATIO_PENALTY = 0.8;
 
-  // ================= v5.0: 3-pillar directional scoring =================
-  // Replaces the old 7-component engineering-heavy score (116pts, ~44% of
-  // which was direction-blind: VolSpike/BB/Range). New system: 3 pillars,
-  // each with an explicit up/down read, plus a small direction-gated
-  // VolSpike bonus. Max = 100 (35 OI Flow + 30 Funding + 25 Velocity + 10
-  // VolSpike bonus). See OI Flow quadrant gate below — this is a *hard*
-  // skip, not a score penalty, when OI+price direction contradicts a LONG.
   const OI_HIST_PERIOD = '5m';
-  const OI_HIST_LIMIT = 97;      // ~8h of 5m data (96 intervals + current)
-  const OI_CHG_1H_HIGH = 10;     // Δ1h magnitude tiers, used once quadrant allows scoring
+  const OI_HIST_LIMIT = 49;
+  const OI_CHG_1H_HIGH = 10;
   const OI_CHG_1H_MID = 5;
-  const OI_CHG_1H_LOW = 3;
-  const OI_CHG_8H_MIN = 3;       // minimum |Δ8h| to count as a real directional OI move
-                                  // (was Δ4h — bumped to 8h to align with Binance's funding
-                                  // settlement cycle per user decision, less noisy than 4h)
-  const PRICE_FLAT_BAND_PCT = 0.5; // |Δ8h price| below this = "flat", not up/down
+  const OI_CHG_4H_MIN = 3;   // minimum Δ4h to qualify as sustained accumulation
 
-  // --- Velocity (max 25 of the 100) ---
+  // --- Composite Velocity (upward price acceleration + volume) ---
   const VEL_PRICE_CANDLES = 3;
   const VEL_PRICE_HIGH = 1.0;
   const VEL_PRICE_MID = 0.5;
-  const VEL_PRICE_HIGH_PTS = 15;
-  const VEL_PRICE_MID_PTS = 8;
   const VEL_VOL_CANDLES = 6;
   const VEL_VOL_HIGH = 1.5;
   const VEL_VOL_MID = 1.2;
-  const VEL_VOL_HIGH_PTS = 10;
-  const VEL_VOL_MID_PTS = 5;
 
-  // --- VolSpike bonus (max 10 — small, direction-gated) ---
-  const VOLSPIKE_BASELINE_CANDLES = 24; // 24h baseline, not 7d — 7d baseline let thin
-                                         // microcap history read as a "spike" from noise alone
-  const VOLSPIKE_HIGH = 3, VOLSPIKE_MID = 2, VOLSPIKE_LOW = 1.5;
-  const VOLSPIKE_HIGH_PTS = 10, VOLSPIKE_MID_PTS = 6, VOLSPIKE_LOW_PTS = 3;
-
-  const KLINE_FULL_LIMIT = 168; // 7 days of 1h candles — still fetched at this depth so
-                                 // squeezeLen (display-only now) and the 8h price-direction
-                                 // lookback both have enough history
+  const KLINE_FULL_LIMIT = 168; // 7 days of 1h candles
   const SQUEEZE_MEDIAN_FACTOR = 0.8;
 
   const SOLID_SQUEEZE_MIN = 4;
   const SOLID_OI_CHG_MIN = 0;
 
+  // --- v3.2: gate was `squeezeLen>=2 OR oiChg1h>0` — oiChg1h>0 triggers on
+  // literally +0.01%, so coins with zero real compression sailed through at
+  // full score on momentum alone (VolSpike+Velocity+TkrDom = up to 51pts,
+  // all lagging/confirmatory signals). That's why top-1/2/3 kept surfacing
+  // coins already mid-move instead of coiled ones. Require a real OI move.
+  const ACCUM_OI_CHG_MIN = 3;    // was: any oiChg1h > 0
   // If the coin has already sprinted recently, it's not "pre" anymore —
-  // penalize hard even if the 3 pillars still read bullish.
+  // penalize hard even if it still has decent squeeze/accum score.
   const ALREADY_MOVING_VEL_PCT = 1.5;  // %/h over last 3 candles (see computeVelocity)
 
-  // --- Setup Type Tag (display only) ---
+  // --- Setup Type Tag ---
   const SETUP_TAKER_MIN = 1.2;
 
-  // --- H1 trend context (display only, not scored — see EMA100 tag) ---
+  // --- H1 trend context filter ---
   const EMA_PERIOD = 100;
+  const EMA_BONUS = 6;           // price above EMA(H1): structural uptrend context
 
-  const MAX_SCORE_THEORETICAL = 100; // 35 (OI Flow) + 30 (Funding) + 25 (Velocity) + 10 (VolSpike bonus)
-  const PRACTICAL_SCORE_CEILING = 100;
-  const TIER_BLAST_MIN = 50; // same proportion as the old 55/117 ceiling
-  const TIER_EMBER_MIN = 30;
-  const TIER_WATCH_MIN = 15;
+  const MAX_SCORE_THEORETICAL = 116; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA(H1)6
+  // Kept above only as documentation of the additive breakdown — it is
+  // essentially never reached in practice, because several of its
+  // components are mutually exclusive or negatively correlated on real
+  // Binance data (e.g. a large VolSpike tends to widen rngPct, which then
+  // fails the tight-range bonus; strong squeeze/BB compression and strong
+  // VolSpike rarely peak on the same candle). Observed real-world ceiling
+  // is roughly 70, with the bulk of daily top candidates landing 30-55.
+  // All *display* math (bar fill %, tier colors, "score/X" labels) uses
+  // PRACTICAL_SCORE_CEILING below instead, so the UI reflects what the
+  // scanner actually produces rather than an unreachable theoretical max.
+  const PRACTICAL_SCORE_CEILING = 75; // slight headroom above the observed ~70 ceiling
+  const TIER_BLAST_MIN = 55; // top of the realistic range — genuinely rare/strong
+  const TIER_EMBER_MIN = 35; // the common "good day" range per observed data
+  const TIER_WATCH_MIN = 18;
 
   // --- Premium gate (additive, does not replace top-N selection) ---
   // Purpose: flag candidates that meet strict confluence criteria, separate
-  // from raw score. Requires genuine compression + confirmed 8h-confluent OI
-  // inflow + adequate liquidity + no already-moved contamination + no
-  // contradiction with today's worst performer. If nothing qualifies in a
-  // cycle, nothing is tagged — that's a correct outcome, not a failure state.
-  const PREMIUM_MIN_SQUEEZE = SOLID_SQUEEZE_MIN; // reuse existing "solid" threshold
+  // from raw score. A high score can come from momentum-only signals; this
+  // gate requires genuine compression + confirmed multi-timeframe OI inflow
+  // + adequate liquidity + no already-moved contamination + no contradiction
+  // with today's worst performer. If nothing qualifies in a cycle, nothing
+  // is tagged — that's a correct outcome, not a failure state.
+  const PREMIUM_MIN_SQUEEZE = SOLID_SQUEEZE_MIN; // reuse existing "solid" threshold (4h)
   const PREMIUM_MIN_QV = VOL_MIN_FULL;           // reuse existing liquidity threshold ($10M)
 
   const TRADFI_CACHE_TTL_MS = 6 * 3600 * 1000;
@@ -683,7 +661,6 @@
   const DIAL_CIRC = 2 * Math.PI * 42; // matches r=42 on the dial circle
 
   let lastShown = [];   // for hysteresis, array of symbols
-  let lastScanDiag = null; // { candidateCount, gatedCount, noKlineCount, errorCount, firstError } — for the empty-state message
   let streaks = {};     // symbol -> how many consecutive cycles it's been shown
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
@@ -772,19 +749,14 @@
 
       // 2. Multi-timeframe OI confluence — both must exist and confirm
       if (r.oiChg1h === null || r.oiChg1h === undefined || !hasNum(r.oiChg1h)) return false;
-      if (r.oiChg8h === null || r.oiChg8h === undefined || !hasNum(r.oiChg8h)) return false;
-      if (r.oiChg1h <= 0 || r.oiChg8h < OI_CHG_8H_MIN) return false;
+      if (r.oiChg4h === null || r.oiChg4h === undefined || !hasNum(r.oiChg4h)) return false;
+      if (r.oiChg1h <= 0 || r.oiChg4h < OI_CHG_4H_MIN) return false;
 
       // 3. Adequate liquidity — excludes thinnest micro-caps from this tier
       if (!hasNum(r.qv) || r.qv < PREMIUM_MIN_QV) return false;
 
       // 4. Must not already be flagged as having moved / gated by 0.5x
       if (r.alreadyMoving === true) return false;
-
-      // 4b. v5.5: must not be OI/price-contradicted (e.g. "OI in + price
-      // down" still has oiChg1h>0 and oiChg8h>=min, so checks 2 above alone
-      // don't catch it now that contradicted candidates reach this function)
-      if (r.oiContradicted === true) return false;
 
       // 5. No contradiction with today's worst performer, if that data exists
       if (topLoserSymNow && r.sym === topLoserSymNow) return false;
@@ -837,10 +809,10 @@
     return { bbWidth: widths[widths.length-1], squeezeLen };
   }
 
-  // Composite Velocity: upward price acceleration + volume ramp (max 25)
-  // Also returns raw priceVel (%/h) so the caller can gate on "already
-  // moving" — a high priceVel here means the move already started, which
-  // is the opposite of a pre-explosion setup.
+  // Composite Velocity: upward price acceleration + volume ramp (max 18)
+  // v3.2: also returns raw priceVel (%/h) so the caller can gate on
+  // "already moving" — a high priceVel here means the move already
+  // started, which is the opposite of a pre-explosion setup.
   function computeVelocity(closes, vols){
     let score = 0;
     const reasons = [];
@@ -849,8 +821,8 @@
     if (closes.length >= VEL_PRICE_CANDLES + 2 && closes[closes.length - (VEL_PRICE_CANDLES + 2)]){
       const base = closes[closes.length - (VEL_PRICE_CANDLES + 2)];
       priceVel = (closes[closes.length-2] - base) / base * 100 / VEL_PRICE_CANDLES;
-      if (priceVel >= VEL_PRICE_HIGH){ score += VEL_PRICE_HIGH_PTS; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
-      else if (priceVel >= VEL_PRICE_MID){ score += VEL_PRICE_MID_PTS; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
+      if (priceVel >= VEL_PRICE_HIGH){ score += 9; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
+      else if (priceVel >= VEL_PRICE_MID){ score += 5; reasons.push('PxVel +' + priceVel.toFixed(2) + '%/h'); }
     }
 
     const win = VEL_VOL_CANDLES;
@@ -859,8 +831,8 @@
       const prior = vols.slice(-(win*2+1), -(win+1)).reduce((a,b)=>a+b,0) / win;
       if (prior > 0){
         const volRamp = recent / prior;
-        if (volRamp >= VEL_VOL_HIGH){ score += VEL_VOL_HIGH_PTS; reasons.push('VolRamp ' + volRamp.toFixed(1) + 'x'); }
-        else if (volRamp >= VEL_VOL_MID){ score += VEL_VOL_MID_PTS; reasons.push('VolRamp ' + volRamp.toFixed(1) + 'x'); }
+        if (volRamp >= VEL_VOL_HIGH){ score += 9; reasons.push('VolRamp ' + volRamp.toFixed(1) + 'x'); }
+        else if (volRamp >= VEL_VOL_MID){ score += 5; reasons.push('VolRamp ' + volRamp.toFixed(1) + 'x'); }
       }
     }
 
@@ -952,10 +924,8 @@
       const pts = data.map(d => parseFloat(d.sumOpenInterestValue));
       const cur = pts[pts.length-1];
       const chg1h = (pts.length >= 13 && pts[pts.length-13]) ? ((cur - pts[pts.length-13]) / pts[pts.length-13] * 100) : null;
-      // Δ8h confirmation window (was Δ4h) — aligned to Binance's 8h funding
-      // settlement cycle. pts[0] is ~8h ago given OI_HIST_LIMIT=97 @ 5m.
-      const chg8h = (pts.length >= OI_HIST_LIMIT && pts[0]) ? ((cur - pts[0]) / pts[0] * 100) : null;
-      out[sym] = { cur: cur, chg1h: chg1h, chg8h: chg8h };
+      const chg4h = (pts.length >= OI_HIST_LIMIT && pts[0]) ? ((cur - pts[0]) / pts[0] * 100) : null;
+      out[sym] = { cur: cur, chg1h: chg1h, chg4h: chg4h };
     });
     return out;
   }
@@ -1111,10 +1081,6 @@
 
     // score
     const results = [];
-    let gatedCount = 0;
-    let noKlineCount = 0;
-    let errorCount = 0;
-    let firstError = null;
     for (let ci = 0; ci < candidates.length; ci++){
       const sym = candidates[ci];
       try{
@@ -1125,19 +1091,14 @@
         const fr = (parseFloat((fundingMap[sym]||{}).lastFundingRate || 0)) * 100;
 
         const k = klinesMap[sym];
-        if (!k || k.length < 6){ noKlineCount++; continue; }
+        if (!k || k.length < 6) continue;
 
         const closes = k.map(c => parseFloat(c[4]));
         const vols = k.map(c => parseFloat(c[7]));
 
         const lastVol = vols.length >= 2 ? vols[vols.length-2] : vols[vols.length-1];
-        // 24h baseline (not full 7d history) — a 7d average let thin-history
-        // microcaps read as a volume "spike" from noise alone, not a real anomaly.
-        const baseSlice = vols.length > 2
-          ? vols.slice(Math.max(0, vols.length - 2 - VOLSPIKE_BASELINE_CANDLES), -2)
-          : [];
-        const avgVol = baseSlice.length
-          ? baseSlice.reduce((a,b)=>a+b,0) / baseSlice.length
+        const avgVol = vols.length > 2
+          ? vols.slice(0, -2).reduce((a,b)=>a+b,0) / Math.max(1, vols.length-2)
           : lastVol;
         const volSpike = avgVol > 0 ? lastVol / avgVol : 0;
 
@@ -1149,110 +1110,129 @@
 
         let score = 0;
         const reasons = [];
-        const tr = takerMap[sym]; // kept for display tag (classifySetup) + isSolid, not scored
+
+        // --- Volume Spike (max 20) ---
+        if (volSpike >= 3){ score += 20; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
+        else if (volSpike >= 2){ score += 12; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
+        else if (volSpike >= 1.5){ score += 6; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
+
+        // --- Compression: BB width + squeeze duration (max 22) ---
+        if (bbWidth && bbWidth < 5){ score += 12; reasons.push('BB ' + bbWidth.toFixed(1) + '%'); }
+        else if (bbWidth && bbWidth < 8){ score += 6; reasons.push('BB ' + bbWidth.toFixed(1) + '%'); }
+
+        if (squeezeLen >= 8){ score += 10; reasons.push('Sqz ' + squeezeLen + 'h'); }
+        else if (squeezeLen >= 4){ score += 5; reasons.push('Sqz ' + squeezeLen + 'h'); }
+
+        // --- Positioning: funding + taker ratio (max 25) ---
+        const tr = takerMap[sym];
+        if (fr < -0.02){ score += 12; reasons.push('FR ' + fr.toFixed(5) + '%'); }
+        else if (fr < -0.01){ score += 8; reasons.push('FR ' + fr.toFixed(5) + '%'); }
+        else if (fr < 0){ score += 4; reasons.push('FR ' + fr.toFixed(5) + '%'); }
+        else if (tr !== null && tr !== undefined && tr >= TAKER_RATIO_BOOST_HIGH){
+          // fr >= 0 (no short-squeeze mechanic) but taker buy is strongly
+          // dominant — genuine buyer-accumulation setup, worth a smaller
+          // credit than a squeeze gets, not zero
+          score += 4; reasons.push('BuyDom (fr≥0) ' + fr.toFixed(5) + '%');
+        }
 
         const oih = oiMap[sym] || {};
         const oiUsd = oih.cur || 0;
         const oiChg1h = (oih.chg1h === undefined) ? null : oih.chg1h;
-        const oiChg8h = (oih.chg8h === undefined) ? null : oih.chg8h;
+        const oiChg4h = (oih.chg4h === undefined) ? null : oih.chg4h;
         const volOi = oiUsd ? (qv / oiUsd) * 100 : 0;
 
-        // last *completed* candle (skip in-progress one), same index convention
-        // used for lastVol above — keeps OI/price direction reads on the same clock.
-        const lastIdx = closes.length - 2;
-        function pctChgBack(hoursBack){
-          const i0 = lastIdx - hoursBack;
-          if (lastIdx < 0 || i0 < 0 || !closes[i0]) return null;
-          return (closes[lastIdx] - closes[i0]) / closes[i0] * 100;
+        if (tr !== null && tr !== undefined){
+          if (tr >= TAKER_RATIO_BOOST_HIGH){ score += 13; reasons.push('TkrDom ' + tr.toFixed(2)); }
+          else if (tr >= TAKER_RATIO_BOOST_MID){ score += 7; reasons.push('TkrDom ' + tr.toFixed(2)); }
+          else if (tr < TAKER_RATIO_PENALTY){ score -= 5; reasons.push('TkrSell ' + tr.toFixed(2)); }
         }
-        const priceChg1h = pctChgBack(1);
-        const priceChg8h = pctChgBack(8);
 
-        // ============ Pillar 1: OI Flow (max 35) — directional, not blind ============
-        // Reads Δ8h OI *together with* Δ8h price into one of 4 quadrants:
-        //   OI in  + price up/flat  -> accumulation            -> score
-        //   OI out + price up       -> short covering/squeeze  -> score
-        //   OI in  + price down     -> shorts piling in         -> HARD SKIP (not a LONG setup)
-        //   OI out + price down     -> longs capitulating       -> HARD SKIP
-        // Ambiguous cases (e.g. OI out + price flat) score 0, no skip.
-        // v5.5: this used to hard-skip the candidate entirely (`continue`)
-        // when OI/price contradicted a LONG. Problem: OI_CHG_8H_MIN (3%) and
-        // PRICE_FLAT_BAND_PCT (0.5%) are both thin relative to 5m-data noise,
-        // so a coin can flip quadrant between two 2-min scans on noise alone
-        // — and once hard-skipped it's not in `results` at all, so
-        // selectStableTop's incumbency protection (margin-gated swap) can't
-        // help it; it just vanishes. Now it's a heavy soft penalty instead:
-        // stays scoreable and stability-eligible, just starts deep in the hole.
-        let oiContradicted = false;
-        if (oiChg1h !== null && oiChg8h !== null && priceChg8h !== null){
-          const oiIn8h = oiChg8h >= OI_CHG_8H_MIN;
-          const oiOut8h = oiChg8h <= -OI_CHG_8H_MIN;
-          const priceUp8h = priceChg8h > PRICE_FLAT_BAND_PCT;
-          const priceDown8h = priceChg8h < -PRICE_FLAT_BAND_PCT;
+        // --- Accumulation: multi-timeframe confluent ΔOI (max ~16) ---
+        // v3.3: replaced double-stack with confluent tiers — no more double-counting.
+        // Δ4hr now acts as a gate/amplifier for Δ1hr signal, not a separate adder.
+        const hasSustainedOI = oiChg4h !== null && oiChg4h >= OI_CHG_4H_MIN;
 
-          if ((oiIn8h && priceDown8h) || (oiOut8h && priceDown8h)){
-            oiContradicted = true;
-            reasons.push(oiIn8h
-              ? '⛔ OI in + price down (shorts piling in) — penalized'
-              : '⛔ OI out + price down (longs capitulating) — penalized');
-          } else if ((oiIn8h && !priceDown8h) || (oiOut8h && priceUp8h)){
-            const mag = Math.abs(oiChg1h);
-            let pts = 0, label = '';
-            if (mag >= OI_CHG_1H_HIGH){ pts = 35; }
-            else if (mag >= OI_CHG_1H_MID){ pts = 20; }
-            else if (mag >= OI_CHG_1H_LOW){ pts = 10; }
-            if (pts){
-              label = (oiIn8h ? 'OI-in/Accum ' : 'OI-out/Squeeze ') +
-                'Δ1h ' + oiChg1h.toFixed(0) + '% Δ8h ' + oiChg8h.toFixed(0) + '%';
-              score += pts;
-              reasons.push(label + ' (+' + pts + ')');
+        // --- Positive ΔOI: confluent tiers ---
+        if (hasSustainedOI){
+          // Both timeframes confirm demand inflow — sustained accumulation
+          let pts = 0, label = '';
+          if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_HIGH){
+            pts = 16; label = 'OI Strong ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          } else if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_MID){
+            pts = 10; label = 'OI Conf ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          }
+          if (pts){ score += pts; reasons.push(label); }
+        } else {
+          // Short-term only — lower confidence without Δ4hr confirmation
+          let stPts = 0, stLabel = '';
+          if (oiUsd && qv > VOL_MIN_FULL){
+            if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_HIGH){
+              stPts = 6; stLabel = 'OI ST ' + oiChg1h.toFixed(0) + '%';
+            } else if (oiChg1h !== null && oiChg1h >= OI_CHG_1H_MID){
+              stPts = 3; stLabel = 'OI ST ' + oiChg1h.toFixed(0) + '%';
             }
+            if (stPts){ score += stPts; reasons.push(stLabel); }
           }
         }
-        if (oiContradicted) gatedCount++; // stat label ("GATED") kept for continuity — now means "penalized", not excluded; see penalty below
 
-        // ============ Pillar 2: Funding Rate (max 30) ============
-        // Negative funding = shorts pay longs — pure tailwind for a LONG.
-        // fr >= 0 scores 0 here, no alternate credit path (kept deliberately simple).
-        if (fr < -0.02){ score += 30; reasons.push('FR ' + fr.toFixed(5) + '% (+30)'); }
-        else if (fr < -0.01){ score += 18; reasons.push('FR ' + fr.toFixed(5) + '% (+18)'); }
-        else if (fr < 0){ score += 8; reasons.push('FR ' + fr.toFixed(5) + '% (+8)'); }
+        // --- Negative ΔOI: position unwind / degen long liquidation risk ---
+        if (oiUsd && qv > VOL_MIN_FULL){
+          let negPts = 0, negLabel = '';
+          if (oiChg4h !== null && oiChg4h <= -OI_CHG_4H_MIN * 2 &&
+              oiChg1h !== null && oiChg1h <= -OI_CHG_1H_MID){
+            negPts = -8; negLabel = 'OI Degen ' + oiChg1h.toFixed(0) + '%/' + oiChg4h.toFixed(0) + '%';
+          }
+          if (negPts){ score += negPts; reasons.push(negLabel); }
+        }
 
-        // ============ Pillar 3: Velocity (max 25) ============
         const velRes = computeVelocity(closes, vols);
         score += velRes.score;
         velRes.reasons.forEach(r => reasons.push(r));
 
-        // ============ Bonus: VolSpike (max 10, direction-gated) ============
-        // Only credited when the last candle wasn't a down move — a big
-        // volume spike on a dump candle isn't a bullish signal.
-        if (!(priceChg1h !== null && priceChg1h < 0)){
-          if (volSpike >= VOLSPIKE_HIGH){ score += VOLSPIKE_HIGH_PTS; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x (+' + VOLSPIKE_HIGH_PTS + ')'); }
-          else if (volSpike >= VOLSPIKE_MID){ score += VOLSPIKE_MID_PTS; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x (+' + VOLSPIKE_MID_PTS + ')'); }
-          else if (volSpike >= VOLSPIKE_LOW){ score += VOLSPIKE_LOW_PTS; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x (+' + VOLSPIKE_LOW_PTS + ')'); }
-        }
+        // --- Structural tightness: range & vol/OI (max 10) ---
+        if (rngPct < 5){ score += 5; reasons.push('Rng ' + rngPct.toFixed(1) + '%'); }
+        else if (rngPct < 8){ score += 3; reasons.push('Rng ' + rngPct.toFixed(1) + '%'); }
 
-        // --- H1 trend context: EMA100 — display-only now, not scored ---
+        if (volOi >= 50){ score += 5; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
+        else if (volOi >= 20){ score += 3; reasons.push('VO ' + volOi.toFixed(0) + '%'); }
+
+        // --- H1 trend context: EMA100 ---
+        // v3.4: pure squeeze/OI/momentum signals don't care whether price sits
+        // above or below the dominant H1 trend average — but a "pre-explosion"
+        // coil below EMA100 is much more likely to be counter-trend noise than
+        // a genuine breakout setup. Reward structural alignment, dampen against it.
         const ema100 = computeEMA(closes, EMA_PERIOD);
         let aboveEma100 = null;
         if (ema100 !== null){
           const lastClose = closes[closes.length - 1];
           aboveEma100 = lastClose > ema100;
-          if (!aboveEma100) reasons.push('⚠️ Below EMA(H1)');
+          if (aboveEma100){
+            score += EMA_BONUS;
+            reasons.push('EMA+(H1) ' + (((lastClose - ema100) / ema100) * 100).toFixed(1) + '%');
+          } else {
+            score -= 3;
+            reasons.push('⚠️ Below EMA-(H1)');
+          }
         }
 
-        // v5.5: apply the OI/price contradiction penalty here, after all
-        // pillars are summed — steeper than the alreadyMoving cut (0.25x vs
-        // 0.5x) since this is a direct thesis contradiction, not just
-        // "already ran". Combines multiplicatively with alreadyMoving below
-        // if both apply — that's intentional, two independent red flags.
-        if (oiContradicted){
-          score = Math.round(score * 0.25);
-          reasons.push('⚠️ OI/price contradicts LONG — heavy penalty (0.25x)');
+        // --- Core thesis gate: coiled energy, not momentum that's already running ---
+        // v3.2: hasAccumulation used to trigger on oiChg1h > 0 (literally +0.01%
+        // counted). That let pure-momentum coins (VolSpike+Velocity+TkrDom, all
+        // lagging signals, up to 51pts) sail through at full score with zero
+        // real compression or accumulation — which is why top-1/2/3 kept being
+        // coins already mid-move instead of coiled ones.
+        const hasCompression = squeezeLen >= 2;
+        const hasAccumulation = oiChg1h !== null && oiChg1h > ACCUM_OI_CHG_MIN;
+        if (!hasCompression && !hasAccumulation){
+          score = Math.round(score * 0.6);
+          reasons.push('Gated x0.6 (no sqz/accum)');
         }
 
-        // --- Already-moving gate: if the coin already sprinted, it's not
-        // "pre-explosion" anymore regardless of how the 3 pillars read. ---
+        // v3.2: separate gate — if the coin has already sprinted in the last
+        // few candles, it's not "pre-explosion" anymore regardless of how
+        // coiled it looked before. This is what let coins that had just
+        // started a 100%+ move slip through as a top pick instead of being
+        // flagged as already-running.
         const priceVel3h = velRes.priceVel;
         const alreadyMoving = (priceVel3h !== null && priceVel3h >= ALREADY_MOVING_VEL_PCT)
           || (pct24 !== null && Math.abs(pct24) > PCT_SOFT_MAX)
@@ -1263,24 +1243,16 @@
         }
         const isMicroCap = qv < VOL_MIN_FULL;
 
-        // squeezeLen/BB/EMA/TkrDom are now display-only signals, not scored —
-        // still used here as the stricter bar for the 💥Solid / 💎Premium tags.
-        // oiContradicted guard added in v5.5: before the OI-quadrant penalty
-        // patch, a contradicted candidate never reached this line (hard-
-        // skipped upstream). Now it can, so it must be excluded explicitly —
-        // isSolid's oiChg1h>0 check alone doesn't rule out "OI in + price
-        // down" (shorts piling in), which has oiChg1h>0 too.
-        const isSolid = !oiContradicted && (squeezeLen >= SOLID_SQUEEZE_MIN && oiChg1h !== null && oiChg1h > SOLID_OI_CHG_MIN &&
+        const isSolid = (squeezeLen >= SOLID_SQUEEZE_MIN && oiChg1h !== null && oiChg1h > SOLID_OI_CHG_MIN &&
           (fr < 0 || (tr !== null && tr !== undefined && tr >= TAKER_RATIO_BOOST_HIGH)));
         const setupTag = classifySetup(fr, tr);
 
         const candidateRow = {
           sym: sym, price: price, pct24: pct24, qv: qv, oiUsd: oiUsd, volOi: volOi,
-          oiChg1h: oiChg1h, oiChg8h: oiChg8h, squeezeLen: squeezeLen,
-          priceChg1h: priceChg1h, priceChg8h: priceChg8h,
+          oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
-          microCap: isMicroCap, alreadyMoving: alreadyMoving, oiContradicted: oiContradicted,
+          microCap: isMicroCap, alreadyMoving: alreadyMoving,
           ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
@@ -1289,18 +1261,11 @@
         // always sees final values (post-gate score, final alreadyMoving, etc)
         candidateRow.premium = isPremiumCandidate(candidateRow, topLoserSym);
         results.push(candidateRow);
-      }catch(e){
-        errorCount++;
-        if (!firstError) firstError = (e && e.message) ? (e.message + (e.stack ? ' | ' + String(e.stack).split('\n')[1] : '')) : String(e);
-        continue;
-      }
+      }catch(e){ continue; }
     }
 
     results.sort((a,b) => b.score - a.score);
-    return {
-      results: results, scannedCount: scannedCount, candidateCount: candidates.length,
-      gatedCount: gatedCount, noKlineCount: noKlineCount, errorCount: errorCount, firstError: firstError
-    };
+    return { results: results, scannedCount: scannedCount, candidateCount: candidates.length };
   }
   // ================= sort =================
   // user-facing sort over the already-selected stable top N
@@ -1375,21 +1340,7 @@
   // ================= render =================
   function renderCards(shown){
     if (!shown.length){
-      let diagLine = '';
-      const d = lastScanDiag;
-      if (d){
-        const parts = [];
-        parts.push(d.candidateCount + ' passed filter');
-        if (d.gatedCount) parts.push(d.gatedCount + ' gated (OI vs LONG)');
-        if (d.noKlineCount) parts.push(d.noKlineCount + ' skipped (no kline data)');
-        if (d.errorCount) parts.push(d.errorCount + ' errored while scoring');
-        parts.push(d.scoredCount + ' scored');
-        diagLine = '<div class="empty-diag">' + parts.join(' · ') + '</div>';
-        if (d.errorCount){
-          diagLine += '<div class="empty-diag" style="opacity:0.7">First error: ' + String(d.firstError || '').slice(0,180) + '</div>';
-        }
-      }
-      cardGrid.innerHTML = '<div class="empty-state">No candidates passed the filter this cycle — normal during quiet or extremely volatile markets.' + diagLine + '</div>';
+      cardGrid.innerHTML = '<div class="empty-state">No candidates passed the filter this cycle — normal during quiet or extremely volatile markets.</div>';
       solidLine.style.display = 'none';
       return;
     }
@@ -1399,7 +1350,7 @@
       const voStr = r.oiUsd ? (r.volOi.toFixed(0) + '%') : 'N/A';
       const tkStr = (r.takerRatio !== null && r.takerRatio !== undefined) ? r.takerRatio.toFixed(2) : 'N/A';
       const oi1h = r.oiChg1h !== null ? ((r.oiChg1h>=0?'+':'') + r.oiChg1h.toFixed(0) + '%') : 'N/A';
-      const oi8h = r.oiChg8h !== null ? ((r.oiChg8h>=0?'+':'') + r.oiChg8h.toFixed(0) + '%') : 'N/A';
+      const oi4h = r.oiChg4h !== null ? ((r.oiChg4h>=0?'+':'') + r.oiChg4h.toFixed(0) + '%') : 'N/A';
       const streak = streaks[r.sym] || 1;
       const streakBadge = streak >= 2 ? ' <span class="streak-badge">🔁x' + streak + '</span>' : '';
       const tagStr = r.setupTag ? (' ' + r.setupTag) : '';
@@ -1431,7 +1382,7 @@
             '<div class="card-row"><span>Spike</span><b>' + r.volSpike.toFixed(1) + 'x</b></div>' +
             '<div class="card-row"><span>BB width</span><b>' + r.bb.toFixed(1) + '%</b></div>' +
             '<div class="card-row"><span>Taker</span><b>' + tkStr + '</b></div>' +
-            '<div class="card-row"><span>OIΔ1h / 8h</span><b>' + oi1h + ' / ' + oi8h + '</b></div>' +
+            '<div class="card-row"><span>OIΔ1h / 4h</span><b>' + oi1h + ' / ' + oi4h + '</b></div>' +
             '<div class="card-row"><span>Squeeze</span><b>' + r.squeezeLen + 'h</b></div>' +
             '<div class="card-reasons">' + r.reasons + '</div>' +
           '</div>' +
@@ -1518,17 +1469,12 @@
     const t0 = performance.now();
     try{
       const scanRes = await scanOnce();
-      const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount, gatedCount = scanRes.gatedCount;
-      const noKlineCount = scanRes.noKlineCount, errorCount = scanRes.errorCount, firstError = scanRes.firstError;
-      if (errorCount > 0){
-        console.error('[BombScanner] ' + errorCount + ' candidate(s) threw during scoring. First error: ' + firstError);
-      }
+      const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount;
       const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
       const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
       lastShown = shown.map(r => r.sym);
       updateStreaks(lastShown);
       window.__bombLastShown = shown;
-      lastScanDiag = { candidateCount: candidateCount, gatedCount: gatedCount, noKlineCount: noKlineCount, errorCount: errorCount, firstError: firstError, scoredCount: results.length };
       renderCards(sortShown(shown));
 
       // Signal-performance tracking: only log symbols that are genuinely
@@ -1536,15 +1482,8 @@
       // server also dedupes via a 6h cooldown per symbol regardless, this
       // just keeps request volume sane. Fire-and-forget: never blocks
       // rendering, never surfaces an error to the user.
-      //
-      // Watch tier (score < TIER_EMBER_MIN) is deliberately NOT logged —
-      // it's a "worth keeping an eye on" tier, not a signal anyone would
-      // realistically act on. Tracking its win rate just adds noise to
-      // the performance panel without answering what the panel exists to
-      // answer (does a genuinely actionable score predict a real move).
       shown.forEach(r => {
         if (prevShownSet.has(r.sym)) return;
-        if (r.score < TIER_EMBER_MIN) return;
         fetch('/api/log-signal', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1578,7 +1517,6 @@
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       $('metaScanned').textContent = scannedCount;
       $('metaCandidates').textContent = candidateCount;
-      $('metaGated').textContent = gatedCount;
       $('metaShown').textContent = shown.length;
       $('metaTopScore').textContent = shown.length ? (shown[0].score + '/' + PRACTICAL_SCORE_CEILING) : '–';
       $('metaElapsed').textContent = elapsed + 's';
@@ -1785,12 +1723,7 @@
   function fmtWinRate(bucket){
     if (!bucket || bucket.winRate === null) return '<span class="perf-pending">–</span>';
     const cls = bucket.winRate >= 50 ? 'perf-win' : '';
-    return '<span class="' + cls + '">' + bucket.winRate + '%</span> <span class="perf-pending">(' + bucket.win + 'W/' + bucket.loss + 'L)</span>';
-  }
-  function fmtVerdict(gainPct, verdict){
-    if (verdict === 'WIN') return '<span class="perf-win">' + fmtPct(gainPct) + ' ✅</span>';
-    if (verdict === 'LOSS') return '<span class="perf-loss">' + fmtPct(gainPct) + ' ❌</span>';
-    return '<span class="perf-pending">' + fmtPct(gainPct) + '</span>';
+    return '<span class="' + cls + '">' + bucket.winRate + '%</span> <span class="perf-pending">(' + bucket.n + ')</span>';
   }
 
   function renderPerfPanel(){
@@ -1799,8 +1732,8 @@
       body.innerHTML = '<div class="perf-empty">Loading signal performance…</div>';
       return;
     }
-    if (!perfData.totalTracked){
-      body.innerHTML = '<div class="perf-empty">No signals logged yet — check back after the first top-N candidates appear.' +
+    if (!perfData.resolvedTotal){
+      body.innerHTML = '<div class="perf-empty">No signals have finished their evaluation window yet — check back once the first 💎Premium / top-tier candidates have had time to play out.' +
         (perfData.pending ? ' (' + perfData.pending + ' signal' + (perfData.pending === 1 ? '' : 's') + ' currently pending.)' : '') + '</div>';
       return;
     }
@@ -1811,7 +1744,7 @@
     let html = '<div class="perf-summary">' +
       '<div class="perf-cell"><b>' + (overall.winRate === null ? '–' : overall.winRate + '%') + '</b><span>Win rate (' + h + ', all)</span></div>' +
       '<div class="perf-cell"><b>' + (premium.winRate === null ? '–' : premium.winRate + '%') + '</b><span>Win rate (' + h + ', 💎Premium)</span></div>' +
-      '<div class="perf-cell"><b>' + perfData.totalTracked + '</b><span>Signals tracked (' + perfData.resolvedTotal + ' fully resolved)</span></div>' +
+      '<div class="perf-cell"><b>' + perfData.resolvedTotal + '</b><span>Signals resolved</span></div>' +
       '<div class="perf-cell"><b>' + (perfData.avgPeakGain24h === null ? '–' : fmtPct(perfData.avgPeakGain24h)) + '</b><span>Avg peak gain (24h)</span></div>' +
     '</div>';
 
@@ -1835,9 +1768,9 @@
           '<td>' + r.score + '</td>' +
           '<td>' + (r.streak >= 2 ? 'x' + r.streak : '–') + '</td>' +
           '<td>' + (r.microCap ? '✓' : '–') + '</td>' +
-          '<td>' + fmtVerdict(r.peakGainAt1h, r.verdict1h) + '</td>' +
-          '<td>' + fmtVerdict(r.peakGainAt4h, r.verdict4h) + '</td>' +
-          '<td>' + fmtVerdict(r.peakGainAt24h, r.verdict24h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt1h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt4h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt24h) + '</td>' +
           '<td>' + new Date(r.ts).toLocaleString('en-GB', { hour12: false }) + '</td>' +
         '</tr>';
       });
