@@ -1469,11 +1469,20 @@
   }
 
   // ================= presence (live "user online" counter) =================
-  // Hits our own /api/presence serverless function (Vercel + KV storage) with a
-  // per-tab session id every HEARTBEAT_MS. The backend keeps that id alive for
-  // PRESENCE_TTL_SECONDS (see /api/presence.js) and reports how many distinct
-  // ids are currently alive — that count is what's shown in the footer.
-  const PRESENCE_HEARTBEAT_MS = 20000; // must stay well under the backend TTL (45s)
+  // Hits our own /api/presence serverless function (Vercel + Upstash Redis)
+  // with a per-tab session id, and reports how many sessions are currently
+  // alive — shown in the footer.
+  //
+  // Cost-saving choices (Upstash free tier = 500K commands/month):
+  //   - Heartbeat every 45s instead of 20s — a bit over 2x fewer requests.
+  //   - Heartbeats PAUSE entirely while the tab is in the background
+  //     (Page Visibility API). A tab sitting unfocused in another window
+  //     doesn't need to keep "voting" itself online every 45s — this is
+  //     usually the single biggest saving in practice, since most open
+  //     tabs are idle in the background most of the time.
+  //   - One heartbeat fires immediately when the tab becomes visible again,
+  //     so the counter feels responsive rather than waiting a full interval.
+  const PRESENCE_HEARTBEAT_MS = 45000; // must stay under half the backend TTL (see presence.js)
   function getSessionId(){
     try{
       let sid = sessionStorage.getItem('bsc_sid');
@@ -1488,6 +1497,7 @@
     }
   }
   const SESSION_ID = getSessionId();
+  let presenceTimer = null;
 
   async function pingPresence(){
     if (!onlineCountEl) return;
@@ -1515,15 +1525,27 @@
     }
   }
 
+  function startPresenceHeartbeat(){
+    if (presenceTimer) return; // already running
+    pingPresence();
+    presenceTimer = setInterval(pingPresence, PRESENCE_HEARTBEAT_MS);
+  }
+  function stopPresenceHeartbeat(){
+    if (presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) stopPresenceHeartbeat();
+    else startPresenceHeartbeat(); // fires one immediately, then resumes the interval
+  });
+
   // ================= boot =================
   paintSortBar();
   initTelegram();
   initAds();
   runCycle();
   pollBigPairs();
-  pingPresence();
+  if (!document.hidden) startPresenceHeartbeat();
   setInterval(pollBigPairs, 6000);
-  setInterval(pingPresence, PRESENCE_HEARTBEAT_MS);
 })();
 </script>
 
