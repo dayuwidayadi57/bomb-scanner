@@ -281,6 +281,7 @@
     padding: 50px 20px; text-align:center; color: var(--ink-faint);
     font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--line-strong); border-radius: var(--radius);
   }
+  .empty-diag{ margin-top: 10px; font-size: 11px; opacity: 0.85; word-break: break-word; }
 
   /* SPONSORED SLOT — static ad card, always last, never touched by re-render */
   .ad-slot{
@@ -670,6 +671,7 @@
   const DIAL_CIRC = 2 * Math.PI * 42; // matches r=42 on the dial circle
 
   let lastShown = [];   // for hysteresis, array of symbols
+  let lastScanDiag = null; // { candidateCount, gatedCount, noKlineCount, errorCount, firstError } — for the empty-state message
   let streaks = {};     // symbol -> how many consecutive cycles it's been shown
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
@@ -1093,6 +1095,9 @@
     // score
     const results = [];
     let gatedCount = 0;
+    let noKlineCount = 0;
+    let errorCount = 0;
+    let firstError = null;
     for (let ci = 0; ci < candidates.length; ci++){
       const sym = candidates[ci];
       try{
@@ -1103,7 +1108,7 @@
         const fr = (parseFloat((fundingMap[sym]||{}).lastFundingRate || 0)) * 100;
 
         const k = klinesMap[sym];
-        if (!k || k.length < 6) continue;
+        if (!k || k.length < 6){ noKlineCount++; continue; }
 
         const closes = k.map(c => parseFloat(c[4]));
         const vols = k.map(c => parseFloat(c[7]));
@@ -1244,11 +1249,18 @@
         // always sees final values (post-gate score, final alreadyMoving, etc)
         candidateRow.premium = isPremiumCandidate(candidateRow, topLoserSym);
         results.push(candidateRow);
-      }catch(e){ continue; }
+      }catch(e){
+        errorCount++;
+        if (!firstError) firstError = (e && e.message) ? (e.message + (e.stack ? ' | ' + String(e.stack).split('\n')[1] : '')) : String(e);
+        continue;
+      }
     }
 
     results.sort((a,b) => b.score - a.score);
-    return { results: results, scannedCount: scannedCount, candidateCount: candidates.length, gatedCount: gatedCount };
+    return {
+      results: results, scannedCount: scannedCount, candidateCount: candidates.length,
+      gatedCount: gatedCount, noKlineCount: noKlineCount, errorCount: errorCount, firstError: firstError
+    };
   }
   // ================= sort =================
   // user-facing sort over the already-selected stable top N
@@ -1323,7 +1335,21 @@
   // ================= render =================
   function renderCards(shown){
     if (!shown.length){
-      cardGrid.innerHTML = '<div class="empty-state">No candidates passed the filter this cycle — normal during quiet or extremely volatile markets.</div>';
+      let diagLine = '';
+      const d = lastScanDiag;
+      if (d){
+        const parts = [];
+        parts.push(d.candidateCount + ' passed filter');
+        if (d.gatedCount) parts.push(d.gatedCount + ' gated (OI vs LONG)');
+        if (d.noKlineCount) parts.push(d.noKlineCount + ' skipped (no kline data)');
+        if (d.errorCount) parts.push(d.errorCount + ' errored while scoring');
+        parts.push(d.scoredCount + ' scored');
+        diagLine = '<div class="empty-diag">' + parts.join(' · ') + '</div>';
+        if (d.errorCount){
+          diagLine += '<div class="empty-diag" style="opacity:0.7">First error: ' + String(d.firstError || '').slice(0,180) + '</div>';
+        }
+      }
+      cardGrid.innerHTML = '<div class="empty-state">No candidates passed the filter this cycle — normal during quiet or extremely volatile markets.' + diagLine + '</div>';
       solidLine.style.display = 'none';
       return;
     }
@@ -1453,11 +1479,16 @@
     try{
       const scanRes = await scanOnce();
       const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount, gatedCount = scanRes.gatedCount;
+      const noKlineCount = scanRes.noKlineCount, errorCount = scanRes.errorCount, firstError = scanRes.firstError;
+      if (errorCount > 0){
+        console.error('[BombScanner] ' + errorCount + ' candidate(s) threw during scoring. First error: ' + firstError);
+      }
       const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
       const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
       lastShown = shown.map(r => r.sym);
       updateStreaks(lastShown);
       window.__bombLastShown = shown;
+      lastScanDiag = { candidateCount: candidateCount, gatedCount: gatedCount, noKlineCount: noKlineCount, errorCount: errorCount, firstError: firstError, scoredCount: results.length };
       renderCards(sortShown(shown));
 
       // Signal-performance tracking: only log symbols that are genuinely
