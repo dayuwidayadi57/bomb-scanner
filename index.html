@@ -632,6 +632,9 @@
   // --- Setup Type Tag (display only) ---
   const SETUP_TAKER_MIN = 1.2;
 
+  // --- H1 trend context (display only, not scored — see EMA100 tag) ---
+  const EMA_PERIOD = 100;
+
   const MAX_SCORE_THEORETICAL = 100; // 35 (OI Flow) + 30 (Funding) + 25 (Velocity) + 10 (VolSpike bonus)
   const PRACTICAL_SCORE_CEILING = 100;
   const TIER_BLAST_MIN = 50; // same proportion as the old 55/117 ceiling
