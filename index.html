@@ -560,7 +560,16 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v5.4'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v5.5'; // bump this on meaningful releases — shown in the footer
+  // v5.5: OI-vs-price contradiction quadrant changed from a hard skip
+  // (candidate dropped from `results` entirely, `continue`) to a 0.25x
+  // soft penalty. Thresholds involved (OI_CHG_8H_MIN=3%, flat band=0.5%)
+  // are thin relative to 5m-data noise, so candidates were flipping
+  // quadrant and vanishing between 2-min scans — and once dropped from
+  // `results`, selectStableTop's incumbency protection couldn't help them.
+  // Now they stay scoreable/stability-eligible, just heavily handicapped.
+  // isSolid / isPremiumCandidate updated to explicitly exclude contradicted
+  // candidates, since they can now reach those checks.
   // v5.0: full scoring redesign — 3 directional pillars (OI Flow / Funding /
   // Velocity) + small direction-gated VolSpike bonus, replacing the old
   // 7-component 116pt score where ~44% was direction-blind (VolSpike/BB/Range).
@@ -771,6 +780,11 @@
 
       // 4. Must not already be flagged as having moved / gated by 0.5x
       if (r.alreadyMoving === true) return false;
+
+      // 4b. v5.5: must not be OI/price-contradicted (e.g. "OI in + price
+      // down" still has oiChg1h>0 and oiChg8h>=min, so checks 2 above alone
+      // don't catch it now that contradicted candidates reach this function)
+      if (r.oiContradicted === true) return false;
 
       // 5. No contradiction with today's worst performer, if that data exists
       if (topLoserSymNow && r.sym === topLoserSymNow) return false;
@@ -1161,7 +1175,15 @@
         //   OI in  + price down     -> shorts piling in         -> HARD SKIP (not a LONG setup)
         //   OI out + price down     -> longs capitulating       -> HARD SKIP
         // Ambiguous cases (e.g. OI out + price flat) score 0, no skip.
-        let oiGated = false;
+        // v5.5: this used to hard-skip the candidate entirely (`continue`)
+        // when OI/price contradicted a LONG. Problem: OI_CHG_8H_MIN (3%) and
+        // PRICE_FLAT_BAND_PCT (0.5%) are both thin relative to 5m-data noise,
+        // so a coin can flip quadrant between two 2-min scans on noise alone
+        // — and once hard-skipped it's not in `results` at all, so
+        // selectStableTop's incumbency protection (margin-gated swap) can't
+        // help it; it just vanishes. Now it's a heavy soft penalty instead:
+        // stays scoreable and stability-eligible, just starts deep in the hole.
+        let oiContradicted = false;
         if (oiChg1h !== null && oiChg8h !== null && priceChg8h !== null){
           const oiIn8h = oiChg8h >= OI_CHG_8H_MIN;
           const oiOut8h = oiChg8h <= -OI_CHG_8H_MIN;
@@ -1169,10 +1191,10 @@
           const priceDown8h = priceChg8h < -PRICE_FLAT_BAND_PCT;
 
           if ((oiIn8h && priceDown8h) || (oiOut8h && priceDown8h)){
-            oiGated = true;
+            oiContradicted = true;
             reasons.push(oiIn8h
-              ? '⛔ OI in + price down (shorts piling in) — skipped'
-              : '⛔ OI out + price down (longs capitulating) — skipped');
+              ? '⛔ OI in + price down (shorts piling in) — penalized'
+              : '⛔ OI out + price down (longs capitulating) — penalized');
           } else if ((oiIn8h && !priceDown8h) || (oiOut8h && priceUp8h)){
             const mag = Math.abs(oiChg1h);
             let pts = 0, label = '';
@@ -1187,7 +1209,7 @@
             }
           }
         }
-        if (oiGated){ gatedCount++; continue; } // not a LONG setup this cycle — skip entirely, don't just dock points
+        if (oiContradicted) gatedCount++; // stat label ("GATED") kept for continuity — now means "penalized", not excluded; see penalty below
 
         // ============ Pillar 2: Funding Rate (max 30) ============
         // Negative funding = shorts pay longs — pure tailwind for a LONG.
@@ -1219,6 +1241,16 @@
           if (!aboveEma100) reasons.push('⚠️ Below EMA(H1)');
         }
 
+        // v5.5: apply the OI/price contradiction penalty here, after all
+        // pillars are summed — steeper than the alreadyMoving cut (0.25x vs
+        // 0.5x) since this is a direct thesis contradiction, not just
+        // "already ran". Combines multiplicatively with alreadyMoving below
+        // if both apply — that's intentional, two independent red flags.
+        if (oiContradicted){
+          score = Math.round(score * 0.25);
+          reasons.push('⚠️ OI/price contradicts LONG — heavy penalty (0.25x)');
+        }
+
         // --- Already-moving gate: if the coin already sprinted, it's not
         // "pre-explosion" anymore regardless of how the 3 pillars read. ---
         const priceVel3h = velRes.priceVel;
@@ -1233,7 +1265,12 @@
 
         // squeezeLen/BB/EMA/TkrDom are now display-only signals, not scored —
         // still used here as the stricter bar for the 💥Solid / 💎Premium tags.
-        const isSolid = (squeezeLen >= SOLID_SQUEEZE_MIN && oiChg1h !== null && oiChg1h > SOLID_OI_CHG_MIN &&
+        // oiContradicted guard added in v5.5: before the OI-quadrant penalty
+        // patch, a contradicted candidate never reached this line (hard-
+        // skipped upstream). Now it can, so it must be excluded explicitly —
+        // isSolid's oiChg1h>0 check alone doesn't rule out "OI in + price
+        // down" (shorts piling in), which has oiChg1h>0 too.
+        const isSolid = !oiContradicted && (squeezeLen >= SOLID_SQUEEZE_MIN && oiChg1h !== null && oiChg1h > SOLID_OI_CHG_MIN &&
           (fr < 0 || (tr !== null && tr !== undefined && tr >= TAKER_RATIO_BOOST_HIGH)));
         const setupTag = classifySetup(fr, tr);
 
@@ -1243,7 +1280,7 @@
           priceChg1h: priceChg1h, priceChg8h: priceChg8h,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
-          microCap: isMicroCap, alreadyMoving: alreadyMoving,
+          microCap: isMicroCap, alreadyMoving: alreadyMoving, oiContradicted: oiContradicted,
           ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
