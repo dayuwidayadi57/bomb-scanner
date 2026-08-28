@@ -438,6 +438,7 @@
       <div class="meta-strip">
         <div class="meta-cell"><b id="metaScanned">–</b><span>Tickers scanned</span></div>
         <div class="meta-cell"><b id="metaCandidates">–</b><span>Passed filter</span></div>
+        <div class="meta-cell"><b id="metaGated">–</b><span>Gated (OI vs LONG)</span></div>
         <div class="meta-cell"><b id="metaShown">–</b><span>Shown</span></div>
         <div class="meta-cell"><b id="metaTopScore">–</b><span>Top score</span></div>
         <div class="meta-cell"><b id="metaElapsed">–</b><span>Scan duration</span></div>
@@ -458,9 +459,9 @@
       <div class="section-head center">
         <h2>Top candidates</h2>
         <div class="legend-strip">
-          <span>🔥 <b>≥60</b></span>
-          <span>⚡ <b>≥40</b></span>
-          <span>👀 <b>≥20</b></span>
+          <span>🔥 <b>≥50</b></span>
+          <span>⚡ <b>≥30</b></span>
+          <span>👀 <b>≥15</b></span>
           <span>🔴 SQZ = short squeeze</span>
           <span>🟢 BUY = buyer accumulation</span>
           <span id="solidLine" style="display:none;">💥 <b id="solidSyms"></b></span>
@@ -1091,6 +1092,7 @@
 
     // score
     const results = [];
+    let gatedCount = 0;
     for (let ci = 0; ci < candidates.length; ci++){
       const sym = candidates[ci];
       try{
@@ -1177,7 +1179,7 @@
             }
           }
         }
-        if (oiGated){ continue; } // not a LONG setup this cycle — skip entirely, don't just dock points
+        if (oiGated){ gatedCount++; continue; } // not a LONG setup this cycle — skip entirely, don't just dock points
 
         // ============ Pillar 2: Funding Rate (max 30) ============
         // Negative funding = shorts pay longs — pure tailwind for a LONG.
@@ -1246,7 +1248,7 @@
     }
 
     results.sort((a,b) => b.score - a.score);
-    return { results: results, scannedCount: scannedCount, candidateCount: candidates.length };
+    return { results: results, scannedCount: scannedCount, candidateCount: candidates.length, gatedCount: gatedCount };
   }
   // ================= sort =================
   // user-facing sort over the already-selected stable top N
@@ -1450,7 +1452,7 @@
     const t0 = performance.now();
     try{
       const scanRes = await scanOnce();
-      const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount;
+      const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount, gatedCount = scanRes.gatedCount;
       const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
       const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
       lastShown = shown.map(r => r.sym);
@@ -1498,6 +1500,7 @@
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       $('metaScanned').textContent = scannedCount;
       $('metaCandidates').textContent = candidateCount;
+      $('metaGated').textContent = gatedCount;
       $('metaShown').textContent = shown.length;
       $('metaTopScore').textContent = shown.length ? (shown[0].score + '/' + PRACTICAL_SCORE_CEILING) : '–';
       $('metaElapsed').textContent = elapsed + 's';
