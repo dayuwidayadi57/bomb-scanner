@@ -101,7 +101,13 @@ export default async function handler(req, res) {
       return rates;
     }
 
-    const overallRates = horizonRates(records);
+    // "overall"/"recent" are the actionable-signal view — exclude Watch
+    // tier here (it's still logged as history via byTier.watch for
+    // anyone who wants it, but it shouldn't dilute the headline numbers
+    // or clutter the recent table with picks nobody was meant to act on).
+    const actionableRecords = records.filter(r => r.tier !== 'watch');
+
+    const overallRates = horizonRates(actionableRecords);
     const premiumRecords = records.filter(r => r.premium);
     const premiumRates = horizonRates(premiumRecords);
     const tierRates = {};
@@ -115,7 +121,7 @@ export default async function handler(req, res) {
     }
 
     const now = Date.now();
-    const recent = records
+    const recent = actionableRecords
       .filter(r => (now - r.ts) <= RECENT_WINDOW_MS) // drop stale entries so the table doesn't pile up
       .sort((a, b) => b.ts - a.ts)
       .slice(0, RECENT_LIMIT)
@@ -131,7 +137,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       pending: pendingIds ? pendingIds.length : 0,
       resolvedTotal: resolvedTotal,
-      totalTracked: records.length,
+      totalTracked: actionableRecords.length,
       winThresholdPct: WIN_THRESHOLD_PCT,
       overall: overallRates,
       byTier: tierRates,

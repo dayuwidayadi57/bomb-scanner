@@ -560,7 +560,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v5.0'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v5.4'; // bump this on meaningful releases — shown in the footer
   // v5.0: full scoring redesign — 3 directional pillars (OI Flow / Funding /
   // Velocity) + small direction-gated VolSpike bonus, replacing the old
   // 7-component 116pt score where ~44% was direction-blind (VolSpike/BB/Range).
@@ -1499,8 +1499,15 @@
       // server also dedupes via a 6h cooldown per symbol regardless, this
       // just keeps request volume sane. Fire-and-forget: never blocks
       // rendering, never surfaces an error to the user.
+      //
+      // Watch tier (score < TIER_EMBER_MIN) is deliberately NOT logged —
+      // it's a "worth keeping an eye on" tier, not a signal anyone would
+      // realistically act on. Tracking its win rate just adds noise to
+      // the performance panel without answering what the panel exists to
+      // answer (does a genuinely actionable score predict a real move).
       shown.forEach(r => {
         if (prevShownSet.has(r.sym)) return;
+        if (r.score < TIER_EMBER_MIN) return;
         fetch('/api/log-signal', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
