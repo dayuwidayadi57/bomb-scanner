@@ -554,6 +554,16 @@
 
   const MAX_SCORE_THEORETICAL = 116; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA(H1)6
 
+  // --- Premium gate (additive, does not replace top-N selection) ---
+  // Purpose: flag candidates that meet strict confluence criteria, separate
+  // from raw score. A high score can come from momentum-only signals; this
+  // gate requires genuine compression + confirmed multi-timeframe OI inflow
+  // + adequate liquidity + no already-moved contamination + no contradiction
+  // with today's worst performer. If nothing qualifies in a cycle, nothing
+  // is tagged — that's a correct outcome, not a failure state.
+  const PREMIUM_MIN_SQUEEZE = SOLID_SQUEEZE_MIN; // reuse existing "solid" threshold (4h)
+  const PREMIUM_MIN_QV = VOL_MIN_FULL;           // reuse existing liquidity threshold ($10M)
+
   const TRADFI_CACHE_TTL_MS = 6 * 3600 * 1000;
 
   const STABLE_BLACKLIST = new Set([
@@ -640,6 +650,41 @@
     if (score >= 40) return '⚡';
     if (score >= 20) return '👀';
     return '·';
+  }
+
+  // Defensive by design: never throws, never assumes a field exists.
+  // Any missing/null/NaN field simply fails that one condition (=> not
+  // premium) instead of crashing or silently passing. Returns false on
+  // any unexpected shape of `r` rather than propagating an exception —
+  // this is a supplementary quality flag, not part of the core pipeline,
+  // so it must never be able to take down scoring for a candidate.
+  function isPremiumCandidate(r, topLoserSymNow){
+    try{
+      if (!r || typeof r !== 'object') return false;
+
+      const hasNum = (v) => typeof v === 'number' && isFinite(v);
+
+      // 1. Genuine compression, not just the loose >=2 gate threshold
+      if (!hasNum(r.squeezeLen) || r.squeezeLen < PREMIUM_MIN_SQUEEZE) return false;
+
+      // 2. Multi-timeframe OI confluence — both must exist and confirm
+      if (r.oiChg1h === null || r.oiChg1h === undefined || !hasNum(r.oiChg1h)) return false;
+      if (r.oiChg4h === null || r.oiChg4h === undefined || !hasNum(r.oiChg4h)) return false;
+      if (r.oiChg1h <= 0 || r.oiChg4h < OI_CHG_4H_MIN) return false;
+
+      // 3. Adequate liquidity — excludes thinnest micro-caps from this tier
+      if (!hasNum(r.qv) || r.qv < PREMIUM_MIN_QV) return false;
+
+      // 4. Must not already be flagged as having moved / gated by 0.5x
+      if (r.alreadyMoving === true) return false;
+
+      // 5. No contradiction with today's worst performer, if that data exists
+      if (topLoserSymNow && r.sym === topLoserSymNow) return false;
+
+      return true;
+    } catch(e){
+      return false; // never let a premium-check bug affect the candidate
+    }
   }
 
   // ================= TradFi filter (official Binance classification) =================
@@ -1122,7 +1167,7 @@
           (fr < 0 || (tr !== null && tr !== undefined && tr >= TAKER_RATIO_BOOST_HIGH)));
         const setupTag = classifySetup(fr, tr);
 
-        results.push({
+        const candidateRow = {
           sym: sym, price: price, pct24: pct24, qv: qv, oiUsd: oiUsd, volOi: volOi,
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
@@ -1131,7 +1176,11 @@
           ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
           reasons: reasons.join(', ')
-        });
+        };
+        // premium flag computed last, from the fully-assembled row, so it
+        // always sees final values (post-gate score, final alreadyMoving, etc)
+        candidateRow.premium = isPremiumCandidate(candidateRow, topLoserSym);
+        results.push(candidateRow);
       }catch(e){ continue; }
     }
 
@@ -1227,12 +1276,16 @@
       const tagStr = r.setupTag ? (' ' + r.setupTag) : '';
       const microTag = r.microCap ? ' <span class="streak-badge" title="Below $10M 24h volume — thin liquidity, where explosive moves tend to start">🐣MicroCap</span>' : '';
       const movingTag = r.alreadyMoving ? ' <span class="streak-badge" title="Already moved recently — no longer a pre-explosion coil">⚠️Moving</span>' : '';
+      // Additive only — never hides a card, never changes ranking/order.
+      // Absence of this badge on every card in a cycle is a valid, honest
+      // outcome (no candidate met the strict confluence bar that cycle).
+      const premiumTag = r.premium ? ' <span class="streak-badge" title="Strict confluence: solid squeeze + confirmed multi-timeframe OI inflow + adequate liquidity + not already moved. Still a technical pattern match, not a guarantee.">💎Premium</span>' : '';
       const chargePct = Math.max(0, Math.min(100, Math.round(r.score / MAX_SCORE_THEORETICAL * 100)));
       return '' +
         '<div class="card">' +
           '<div class="card-head">' +
             '<div class="card-sym-row">' +
-              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + microTag + movingTag + '</div>' +
+              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + premiumTag + microTag + movingTag + '</div>' +
             '</div>' +
             '<div class="charge-meter">' +
               '<div class="charge-track"><div class="charge-fill ' + scoreClass(r.score) + '" style="width:' + chargePct + '%"></div></div>' +
