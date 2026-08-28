@@ -458,7 +458,7 @@
   <div class="wrap">
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
-      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.1 · User online: N/A</span>
+      <span class="mono" id="onlineCount" style="font-size:11px; color:var(--ink-faint);">v3.7 · User online: N/A</span>
     </div>
     <div class="footer-bottom">
       <a href="https://x.com/AICoddingAgent" target="_blank" rel="noopener noreferrer" class="mono footer-x-link">
@@ -473,7 +473,19 @@
   'use strict';
 
   // ================= CONFIG (v3.2 — pre-explosion visibility fix) =================
-  const BASE = 'https://fapi.binance.com';
+  // v3.7: Binance calls go through our own /api/binance-proxy instead of
+  // hitting fapi.binance.com directly. Two benefits:
+  //  (a) many concurrent users share ONE cached response (via Vercel's CDN
+  //      cache, Cache-Control: s-maxage) instead of each browser re-fetching
+  //      the same data from Binance independently.
+  //  (b) a small server-side rate limiter (see api/binance-proxy.js)
+  //      protects the underlying Binance API from being hammered when many
+  //      users' scan cycles land close together.
+  //  Also v3.7: the "User online" presence counter (api/presence.js) shares
+  //  the same Upstash Redis instance added for this proxy's rate limiter.
+  function proxied(pathAndQuery){
+    return '/api/binance-proxy?path=' + encodeURIComponent(pathAndQuery);
+  }
   const REFRESH_SEC = 120;
   const OI_MAX = 25_000_000;
 
@@ -493,6 +505,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
+  const APP_VERSION = 'v3.7'; // bump this on meaningful releases — shown in the footer
   const CONCURRENCY = 10;
   const REQ_TIMEOUT_MS = 30000;
 
@@ -636,7 +649,7 @@
       return tradfiCache.symbols;
     }
     try{
-      const data = await fetchJSON(BASE + '/fapi/v1/exchangeInfo');
+      const data = await fetchJSON(proxied('/fapi/v1/exchangeInfo'));
       const syms = new Set((data.symbols || [])
         .filter(s => s.contractType === 'TRADIFI_PERPETUAL')
         .map(s => s.symbol));
@@ -781,7 +794,7 @@
   async function fetchOIMap(symbols){
     const out = {};
     await mapLimit(symbols, CONCURRENCY, async (sym) => {
-      const data = await fetchJSON(BASE + '/futures/data/openInterestHist?symbol=' + sym + '&period=' + OI_HIST_PERIOD + '&limit=' + OI_HIST_LIMIT);
+      const data = await fetchJSON(proxied('/futures/data/openInterestHist?symbol=' + sym + '&period=' + OI_HIST_PERIOD + '&limit=' + OI_HIST_LIMIT));
       if (!data || !data.length) return;
       const pts = data.map(d => parseFloat(d.sumOpenInterestValue));
       const cur = pts[pts.length-1];
@@ -795,7 +808,7 @@
   async function fetchKlinesMap(symbols){
     const out = {};
     await mapLimit(symbols, CONCURRENCY, async (sym) => {
-      const data = await fetchJSON(BASE + '/fapi/v1/klines?symbol=' + sym + '&interval=1h&limit=' + KLINE_FULL_LIMIT);
+      const data = await fetchJSON(proxied('/fapi/v1/klines?symbol=' + sym + '&interval=1h&limit=' + KLINE_FULL_LIMIT));
       if (data) out[sym] = data;
     });
     return out;
@@ -808,7 +821,7 @@
       for (let i = 0; i < TAKER_PERIODS.length; i++){
         const period = TAKER_PERIODS[i];
         try{
-          const resp = await fetchJSON(BASE + '/futures/data/takerlongshortRatio?symbol=' + sym + '&period=' + period + '&limit=1');
+          const resp = await fetchJSON(proxied('/futures/data/takerlongshortRatio?symbol=' + sym + '&period=' + period + '&limit=1'));
           if (resp && resp.length){
             const r = parseFloat(resp[0].buySellRatio);
             if (r > 0) ratios.push(r);
@@ -856,8 +869,8 @@
 
   async function scanOnce(){
     const results0 = await Promise.all([
-      fetchJSON(BASE + '/fapi/v1/ticker/24hr'),
-      fetchJSON(BASE + '/fapi/v1/premiumIndex').catch(function(){ return []; })
+      fetchJSON(proxied('/fapi/v1/ticker/24hr')),
+      fetchJSON(proxied('/fapi/v1/premiumIndex')).catch(function(){ return []; })
     ]);
     const tickerArr = results0[0], fundingArr = results0[1];
 
@@ -1289,7 +1302,7 @@
       if (topLoserSym && !syms.includes(topLoserSym)) syms.push(topLoserSym);
 
       const results = await Promise.all(
-        syms.map(s => fetchJSON(BASE + '/fapi/v1/ticker/24hr?symbol=' + s))
+        syms.map(s => fetchJSON(proxied('/fapi/v1/ticker/24hr?symbol=' + s)))
       );
 
       const items = results.filter(Boolean).map(t => {
@@ -1518,10 +1531,10 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const n = (data && typeof data.online === 'number') ? data.online : null;
-      onlineCountEl.textContent = 'v3.1 · User online: ' + (n === null ? 'N/A' : n);
+      onlineCountEl.textContent = APP_VERSION + ' · User online: ' + (n === null ? 'N/A' : n);
     }catch(e){
       // backend not deployed yet, KV not configured, or network hiccup — degrade quietly
-      onlineCountEl.textContent = 'v3.1 · User online: N/A';
+      onlineCountEl.textContent = APP_VERSION + ' · User online: N/A';
     }
   }
 
