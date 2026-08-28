@@ -334,6 +334,40 @@
   .spark-wrap{ position: relative; margin-bottom: 8px; }
   .spark-canvas{ display:block; width:100%; height:40px; border-radius:8px; background: var(--panel-2); }
 
+  /* SIGNAL PERFORMANCE PANEL */
+  .perf-toggle-bar{ display:flex; justify-content:center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .perf-summary{
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    margin-bottom: 18px; overflow: hidden;
+  }
+  .perf-cell{ padding: 14px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align:center; }
+  .perf-cell:nth-child(2n){ border-right: none; }
+  .perf-cell b{ display:block; font-family: var(--font-mono); font-size: 20px; color: var(--ink); margin-bottom: 3px; }
+  .perf-cell span{ font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; }
+  @media (min-width: 700px){
+    .perf-summary{ grid-template-columns: repeat(4, 1fr); }
+    .perf-cell:nth-child(2n){ border-right: 1px solid var(--line); }
+    .perf-cell:nth-child(4n){ border-right: none; }
+  }
+  .perf-breakdown{
+    display:flex; gap: 10px; flex-wrap: wrap; justify-content:center; margin-bottom: 20px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  }
+  .perf-breakdown .chip{
+    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-2);
+  }
+  .perf-breakdown .chip b{ color: var(--ink); }
+  .perf-table-wrap{ overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+  table.perf-table{ width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+  table.perf-table th, table.perf-table td{ padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
+  table.perf-table th{ color: var(--ink-faint); text-transform: uppercase; font-size: 9.5px; letter-spacing: .03em; }
+  table.perf-table tr:last-child td{ border-bottom: none; }
+  .perf-win{ color: var(--phosphor); font-weight: 700; }
+  .perf-loss{ color: var(--danger); }
+  .perf-pending{ color: var(--ink-faint); }
+  .perf-empty{ padding: 30px 14px; text-align:center; color: var(--ink-faint); font-size: 12.5px; }
+
   footer{ border-top: 1px solid var(--line); padding: 30px 0 28px; }
   .footer-top{ display:flex; justify-content: space-between; align-items:center; flex-wrap: wrap; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
   .footer-brand{ font-family: var(--font-mono); font-weight:700; font-size: 12px; }
@@ -449,6 +483,25 @@
       </div>
       <div class="card-grid" id="cardGrid">
         <div class="empty-state">Waiting for the first scan cycle to finish…</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="performance">
+    <div class="wrap">
+      <div class="section-head center">
+        <h2>Signal performance</h2>
+        <div class="legend-strip">
+          <span>Win = peak gain reached <b id="perfThreshold">+5%</b> within the window</span>
+        </div>
+      </div>
+      <div class="perf-toggle-bar" role="toolbar" aria-label="Performance horizon">
+        <button class="sort-chip" data-horizon="1h">1h</button>
+        <button class="sort-chip active" data-horizon="4h">4h</button>
+        <button class="sort-chip" data-horizon="24h">24h</button>
+      </div>
+      <div id="perfBody">
+        <div class="perf-empty">Loading signal performance…</div>
       </div>
     </div>
   </section>
@@ -664,6 +717,13 @@
     if (score >= TIER_EMBER_MIN) return '⚡';
     if (score >= TIER_WATCH_MIN) return '👀';
     return '·';
+  }
+  // Used for signal-performance logging (api/log-signal.js) — a plain
+  // string name for the tier, matching scoreClass/scoreTag's thresholds.
+  function scoreTierName(score){
+    if (score >= TIER_BLAST_MIN) return 'blast';
+    if (score >= TIER_EMBER_MIN) return 'ember';
+    return 'watch'; // only rows that already passed TOP_N selection get logged, so this is a safe floor
   }
 
   // Defensive by design: never throws, never assumes a field exists.
@@ -1404,11 +1464,33 @@
     try{
       const scanRes = await scanOnce();
       const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount;
+      const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
       const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
       lastShown = shown.map(r => r.sym);
       updateStreaks(lastShown);
       window.__bombLastShown = shown;
       renderCards(sortShown(shown));
+
+      // Signal-performance tracking: only log symbols that are genuinely
+      // NEW to the top-N this cycle (not every row every cycle) — the
+      // server also dedupes via a 6h cooldown per symbol regardless, this
+      // just keeps request volume sane. Fire-and-forget: never blocks
+      // rendering, never surfaces an error to the user.
+      shown.forEach(r => {
+        if (prevShownSet.has(r.sym)) return;
+        fetch('/api/log-signal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sym: r.sym,
+            score: r.score,
+            tier: scoreTierName(r.score),
+            premium: !!r.premium,
+            microCap: !!r.microCap,
+            streak: streaks[r.sym] || 1
+          })
+        }).catch(function(){ /* best-effort — a missed log just means one fewer data point */ });
+      });
 
       // v3.5: the stability filter can hold back a symbol that scored
       // highest THIS cycle if it didn't beat the weakest shown symbol by
@@ -1618,14 +1700,112 @@
     else startPresenceHeartbeat(); // fires one immediately, then resumes the interval
   });
 
+  // ================= signal performance panel =================
+  // Reads api/signal-stats.js (aggregated by api/evaluate-signals.js, which
+  // runs every ~15min via GitHub Actions — see .github/workflows). Refreshed
+  // on its own slower interval since it changes far less often than a scan.
+  const PERF_REFRESH_MS = 5 * 60 * 1000; // 5 min — stats only move on the eval cadence anyway
+  let perfHorizon = '4h';
+  let perfData = null;
+
+  const TIER_LABEL = { blast: '🔥 Blast', ember: '⚡ Ember', watch: '👀 Watch' };
+
+  function fmtPct(v){
+    if (v === null || v === undefined) return '–';
+    return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  }
+  function fmtWinRate(bucket){
+    if (!bucket || bucket.winRate === null) return '<span class="perf-pending">–</span>';
+    const cls = bucket.winRate >= 50 ? 'perf-win' : '';
+    return '<span class="' + cls + '">' + bucket.winRate + '%</span> <span class="perf-pending">(' + bucket.n + ')</span>';
+  }
+
+  function renderPerfPanel(){
+    const body = $('perfBody');
+    if (!perfData){
+      body.innerHTML = '<div class="perf-empty">Loading signal performance…</div>';
+      return;
+    }
+    if (!perfData.resolvedTotal){
+      body.innerHTML = '<div class="perf-empty">No signals have finished their evaluation window yet — check back once the first 💎Premium / top-tier candidates have had time to play out.' +
+        (perfData.pending ? ' (' + perfData.pending + ' signal' + (perfData.pending === 1 ? '' : 's') + ' currently pending.)' : '') + '</div>';
+      return;
+    }
+    const h = perfHorizon;
+    const overall = (perfData.overall && perfData.overall[h]) || { winRate: null, n: 0 };
+    const premium = (perfData.premium && perfData.premium[h]) || { winRate: null, n: 0 };
+
+    let html = '<div class="perf-summary">' +
+      '<div class="perf-cell"><b>' + (overall.winRate === null ? '–' : overall.winRate + '%') + '</b><span>Win rate (' + h + ', all)</span></div>' +
+      '<div class="perf-cell"><b>' + (premium.winRate === null ? '–' : premium.winRate + '%') + '</b><span>Win rate (' + h + ', 💎Premium)</span></div>' +
+      '<div class="perf-cell"><b>' + perfData.resolvedTotal + '</b><span>Signals resolved</span></div>' +
+      '<div class="perf-cell"><b>' + (perfData.avgPeakGain24h === null ? '–' : fmtPct(perfData.avgPeakGain24h)) + '</b><span>Avg peak gain (24h)</span></div>' +
+    '</div>';
+
+    html += '<div class="perf-breakdown">';
+    ['blast','ember','watch'].forEach(function(t){
+      const b = perfData.byTier && perfData.byTier[t] && perfData.byTier[t][h];
+      html += '<span class="chip">' + TIER_LABEL[t] + ': ' + fmtWinRate(b) + '</span>';
+    });
+    html += '</div>';
+
+    if (perfData.recent && perfData.recent.length){
+      html += '<div class="perf-table-wrap"><table class="perf-table"><thead><tr>' +
+        '<th>Symbol</th><th>Tier</th><th>Score</th><th>🔁</th><th>🐣</th>' +
+        '<th>Peak 1h</th><th>Peak 4h</th><th>Peak 24h</th><th>When</th>' +
+      '</tr></thead><tbody>';
+      perfData.recent.forEach(function(r){
+        const tierTxt = (r.premium ? '💎 ' : '') + (TIER_LABEL[r.tier] || r.tier);
+        html += '<tr>' +
+          '<td><b>' + r.sym + '</b></td>' +
+          '<td>' + tierTxt + '</td>' +
+          '<td>' + r.score + '</td>' +
+          '<td>' + (r.streak >= 2 ? 'x' + r.streak : '–') + '</td>' +
+          '<td>' + (r.microCap ? '✓' : '–') + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt1h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt4h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt24h) + '</td>' +
+          '<td>' + new Date(r.ts).toLocaleString('en-GB', { hour12: false }) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    body.innerHTML = html;
+  }
+
+  async function loadPerfStats(){
+    try{
+      const res = await fetch('/api/signal-stats');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      perfData = await res.json();
+      if (perfData && typeof perfData.winThresholdPct === 'number'){
+        $('perfThreshold').textContent = '+' + perfData.winThresholdPct + '%';
+      }
+    }catch(e){
+      perfData = perfData || null; // keep last good render if this poll fails
+    }
+    renderPerfPanel();
+  }
+
+  document.querySelectorAll('[data-horizon]').forEach(function(el){
+    el.addEventListener('click', function(){
+      perfHorizon = el.getAttribute('data-horizon');
+      document.querySelectorAll('[data-horizon]').forEach(function(b){ b.classList.toggle('active', b === el); });
+      renderPerfPanel();
+    });
+  });
+
   // ================= boot =================
   paintSortBar();
   initTelegram();
   initAds();
   runCycle();
   pollBigPairs();
+  loadPerfStats();
   if (!document.hidden) startPresenceHeartbeat();
   setInterval(pollBigPairs, 6000);
+  setInterval(loadPerfStats, PERF_REFRESH_MS);
 })();
 </script>
 

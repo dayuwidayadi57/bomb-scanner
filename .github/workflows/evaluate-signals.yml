@@ -1,0 +1,31 @@
+name: Evaluate signal performance
+
+# Vercel's Hobby plan only allows once-per-day cron schedules, which is way
+# too coarse for tracking peak gain within 1h/4h/24h windows. This workflow
+# is the free workaround: GitHub Actions has no such limit, so it just calls
+# our own /api/evaluate-signals endpoint on a normal schedule instead.
+#
+# One-time setup:
+#   1. In Vercel project settings -> Environment Variables, add EVAL_SECRET
+#      (any long random string) to Production.
+#   2. In this GitHub repo -> Settings -> Secrets and variables -> Actions,
+#      add a repository secret also named EVAL_SECRET with the SAME value.
+#   3. Replace SITE_URL below with your actual deployed domain.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call evaluate-signals endpoint
+        env:
+          EVAL_SECRET: ${{ secrets.EVAL_SECRET }}
+          SITE_URL: https://bomb-scanner.vercel.app # <-- update if your domain differs
+        run: |
+          curl -sf -X POST "$SITE_URL/api/evaluate-signals" \
+            -H "Authorization: Bearer $EVAL_SECRET" \
+            -w "\nHTTP %{http_code}\n"
