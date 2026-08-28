@@ -515,11 +515,10 @@
   const SETUP_TAKER_MIN = 1.2;
 
   // --- H1 trend context filter ---
-  const EMA100_PERIOD = 100;
-  const EMA100_BONUS = 6;        // price above EMA100(H1): structural uptrend context
-  const EMA100_BELOW_MULT = 0.85; // price below EMA100(H1): dampen score, likely counter-trend noise
+  const EMA_PERIOD = 100;
+  const EMA_BONUS = 6;           // price above EMA(H1): structural uptrend context
 
-  const MAX_SCORE_THEORETICAL = 117; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA100(H1)6
+  const MAX_SCORE_THEORETICAL = 116; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA(H1)6
 
   const TRADFI_CACHE_TTL_MS = 6 * 3600 * 1000;
 
@@ -1027,17 +1026,17 @@
         // above or below the dominant H1 trend average — but a "pre-explosion"
         // coil below EMA100 is much more likely to be counter-trend noise than
         // a genuine breakout setup. Reward structural alignment, dampen against it.
-        const ema100 = computeEMA(closes, EMA100_PERIOD);
+        const ema100 = computeEMA(closes, EMA_PERIOD);
         let aboveEma100 = null;
         if (ema100 !== null){
           const lastClose = closes[closes.length - 1];
           aboveEma100 = lastClose > ema100;
           if (aboveEma100){
-            score += EMA100_BONUS;
-            reasons.push('EMA100(H1)+ ' + (((lastClose - ema100) / ema100) * 100).toFixed(1) + '%');
+            score += EMA_BONUS;
+            reasons.push('EMA+(H1) ' + (((lastClose - ema100) / ema100) * 100).toFixed(1) + '%');
           } else {
-            score = Math.round(score * EMA100_BELOW_MULT);
-            reasons.push('⚠️ Below EMA100(H1)');
+            score -= 3;
+            reasons.push('⚠️ Below EMA-(H1)');
           }
         }
 
