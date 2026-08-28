@@ -190,6 +190,14 @@
   }
   .error-banner.show{ display:block; }
 
+  .info-banner{
+    display:none; margin-top: 10px; padding: 12px 14px; border-radius: 10px;
+    background: color-mix(in srgb, var(--amber) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
+    color: var(--amber); font-family: var(--font-mono); font-size: 12px; line-height: 1.6;
+  }
+  .info-banner.show{ display:block; }
+
   /* TICKER */
   .ticker-band{
     background: var(--panel-2); color: var(--ink-dim);
@@ -329,6 +337,13 @@
   footer{ border-top: 1px solid var(--line); padding: 30px 0 28px; }
   .footer-top{ display:flex; justify-content: space-between; align-items:center; flex-wrap: wrap; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
   .footer-brand{ font-family: var(--font-mono); font-weight:700; font-size: 12px; }
+  .footer-bottom{ display:flex; justify-content:center; }
+  .footer-x-link{
+    display:inline-flex; align-items:center; gap: 6px;
+    font-size: 11.5px; font-weight: 600; color: var(--ink-dim);
+    text-decoration: none; transition: color .15s ease;
+  }
+  .footer-x-link:hover{ color: var(--amber); }
   @media (max-width: 700px){
     .hero-top{ align-items: flex-start; }
   }
@@ -396,6 +411,7 @@
       </div>
 
       <div class="error-banner" id="errorBanner"></div>
+      <div class="info-banner" id="hiddenTopBanner"></div>
     </div>
   </section>
 
@@ -443,6 +459,11 @@
     <div class="footer-top">
       <span class="footer-brand mono">BOMB_SCANNER.live</span>
       <span class="mono" style="font-size:11px; color:var(--ink-faint);">v3.1 · refresh 120s</span>
+    </div>
+    <div class="footer-bottom">
+      <a href="https://x.com/AICoddingAgent" target="_blank" rel="noopener noreferrer" class="mono footer-x-link">
+        𝕏 Follow @AICoddingAgent
+      </a>
     </div>
   </div>
 </footer>
@@ -534,6 +555,7 @@
   const countdownValue = $('countdownValue');
   const dialProgress = $('dialProgress');
   const errorBanner = $('errorBanner');
+  const hiddenTopBanner = $('hiddenTopBanner');
   const cardGrid = $('cardGrid');
   const tickerTrack = $('tickerTrack');
   const solidLine = $('solidLine');
@@ -881,8 +903,22 @@
       if (Math.abs(pct) > PCT_HARD_MAX || qv < VOL_MIN_HARD || rng > RANGE_HARD_MAX) continue;
       candidates.push(sym);
     }
-    candidates.sort((a,b) => parseFloat(tickers[b].quoteVolume) - parseFloat(tickers[a].quoteVolume));
-    candidates = candidates.slice(0, MAX_CANDIDATES);
+    // v3.5: don't cut candidates by raw volume-desc — that systematically
+    // excluded the lowest-volume coins (exactly the micro-cap, most-likely
+    // "pre-explosion" band per the note above) before they ever reached
+    // scoring. Guarantee the full micro-cap tier (qv < VOL_MIN_FULL)
+    // survives first; only spend remaining budget on the higher-liquidity
+    // tier. If the micro-cap tier alone exceeds MAX_CANDIDATES, keep the
+    // higher-volume side of THAT tier (still micro-cap) instead of losing
+    // the segment entirely.
+    const microTier = candidates
+      .filter(s => parseFloat(tickers[s].quoteVolume) < VOL_MIN_FULL)
+      .sort((a,b) => parseFloat(tickers[b].quoteVolume) - parseFloat(tickers[a].quoteVolume));
+    const largerTier = candidates
+      .filter(s => parseFloat(tickers[s].quoteVolume) >= VOL_MIN_FULL)
+      .sort((a,b) => parseFloat(tickers[b].quoteVolume) - parseFloat(tickers[a].quoteVolume));
+    const largerBudget = Math.max(0, MAX_CANDIDATES - microTier.length);
+    candidates = microTier.slice(0, MAX_CANDIDATES).concat(largerTier.slice(0, largerBudget));
     const scannedCount = tickerArr.length;
 
     // OI filter
@@ -1292,6 +1328,22 @@
       updateStreaks(lastShown);
       window.__bombLastShown = shown;
       renderCards(sortShown(shown));
+
+      // v3.5: the stability filter can hold back a symbol that scored
+      // highest THIS cycle if it didn't beat the weakest shown symbol by
+      // SWAP_MARGIN yet. Surface that instead of silently hiding it —
+      // otherwise "Top score" on screen isn't actually today's top score.
+      const trueTop = results.length ? results[0] : null;
+      const shownSyms = new Set(shown.map(r => r.sym));
+      if (trueTop && !shownSyms.has(trueTop.sym)){
+        hiddenTopBanner.innerHTML = '⚡ Highest score this cycle isn\'t shown yet: <b>' +
+          trueTop.sym + '</b> (' + trueTop.score + '/' + MAX_SCORE_THEORETICAL +
+          ') — held back by the stability filter, needs +' + SWAP_MARGIN +
+          ' over the weakest shown symbol to swap in.';
+        hiddenTopBanner.classList.add('show');
+      } else {
+        hiddenTopBanner.classList.remove('show');
+      }
 
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
       $('metaScanned').textContent = scannedCount;
