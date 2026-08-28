@@ -553,6 +553,20 @@
   const EMA_BONUS = 6;           // price above EMA(H1): structural uptrend context
 
   const MAX_SCORE_THEORETICAL = 116; // VolSpike20 + BB/Sqz22 + FR/Taker25(v3.3) + OI-RoC16(v3.3) + Range/VolOI10 + Velocity18 + EMA(H1)6
+  // Kept above only as documentation of the additive breakdown — it is
+  // essentially never reached in practice, because several of its
+  // components are mutually exclusive or negatively correlated on real
+  // Binance data (e.g. a large VolSpike tends to widen rngPct, which then
+  // fails the tight-range bonus; strong squeeze/BB compression and strong
+  // VolSpike rarely peak on the same candle). Observed real-world ceiling
+  // is roughly 70, with the bulk of daily top candidates landing 30-55.
+  // All *display* math (bar fill %, tier colors, "score/X" labels) uses
+  // PRACTICAL_SCORE_CEILING below instead, so the UI reflects what the
+  // scanner actually produces rather than an unreachable theoretical max.
+  const PRACTICAL_SCORE_CEILING = 75; // slight headroom above the observed ~70 ceiling
+  const TIER_BLAST_MIN = 55; // top of the realistic range — genuinely rare/strong
+  const TIER_EMBER_MIN = 35; // the common "good day" range per observed data
+  const TIER_WATCH_MIN = 18;
 
   // --- Premium gate (additive, does not replace top-N selection) ---
   // Purpose: flag candidates that meet strict confluence criteria, separate
@@ -640,15 +654,15 @@
     return s;
   }
   function scoreClass(score){
-    if (score >= 60) return 'tier-blast';
-    if (score >= 40) return 'tier-ember';
-    if (score >= 20) return 'tier-watch';
+    if (score >= TIER_BLAST_MIN) return 'tier-blast';
+    if (score >= TIER_EMBER_MIN) return 'tier-ember';
+    if (score >= TIER_WATCH_MIN) return 'tier-watch';
     return 'tier-dim';
   }
   function scoreTag(score){
-    if (score >= 60) return '🔥';
-    if (score >= 40) return '⚡';
-    if (score >= 20) return '👀';
+    if (score >= TIER_BLAST_MIN) return '🔥';
+    if (score >= TIER_EMBER_MIN) return '⚡';
+    if (score >= TIER_WATCH_MIN) return '👀';
     return '·';
   }
 
@@ -1280,7 +1294,7 @@
       // Absence of this badge on every card in a cycle is a valid, honest
       // outcome (no candidate met the strict confluence bar that cycle).
       const premiumTag = r.premium ? ' <span class="streak-badge" title="Strict confluence: solid squeeze + confirmed multi-timeframe OI inflow + adequate liquidity + not already moved. Still a technical pattern match, not a guarantee.">💎Premium</span>' : '';
-      const chargePct = Math.max(0, Math.min(100, Math.round(r.score / MAX_SCORE_THEORETICAL * 100)));
+      const chargePct = Math.max(0, Math.min(100, Math.round(r.score / PRACTICAL_SCORE_CEILING * 100)));
       return '' +
         '<div class="card">' +
           '<div class="card-head">' +
@@ -1404,7 +1418,7 @@
       const shownSyms = new Set(shown.map(r => r.sym));
       if (trueTop && !shownSyms.has(trueTop.sym)){
         hiddenTopBanner.innerHTML = '⚡ Highest score this cycle isn\'t shown yet: <b>' +
-          trueTop.sym + '</b> (' + trueTop.score + '/' + MAX_SCORE_THEORETICAL +
+          trueTop.sym + '</b> (' + trueTop.score + '/' + PRACTICAL_SCORE_CEILING +
           ') — held back by the stability filter, needs +' + SWAP_MARGIN +
           ' over the weakest shown symbol to swap in.';
         hiddenTopBanner.classList.add('show');
@@ -1416,7 +1430,7 @@
       $('metaScanned').textContent = scannedCount;
       $('metaCandidates').textContent = candidateCount;
       $('metaShown').textContent = shown.length;
-      $('metaTopScore').textContent = shown.length ? (shown[0].score + '/' + MAX_SCORE_THEORETICAL) : '–';
+      $('metaTopScore').textContent = shown.length ? (shown[0].score + '/' + PRACTICAL_SCORE_CEILING) : '–';
       $('metaElapsed').textContent = elapsed + 's';
       $('metaUpdated').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
 
