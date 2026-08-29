@@ -99,7 +99,7 @@ Tiap cycle, semua symbol Binance Futures di-filter lalu di-skor. Alurnya:
 
    | Komponen | Poin max | Catatan |
    |---|---|---|
-   | Volume Spike | 20 | lonjakan volume candle terakhir vs rata-rata |
+   | Volume Spike | 20 | lonjakan volume candle terakhir vs rata-rata, **digate arah** (v4.3, lihat catatan di bawah) |
    | BB squeeze + durasi | 22 | kompresi Bollinger Band + lama squeeze |
    | Funding rate negatif / BuyDom | 25 | funding negatif = short-squeeze potensial |
    | Taker dominance | 13 | rasio taker buy/sell ekstrem |
@@ -120,6 +120,30 @@ Tiap cycle, semua symbol Binance Futures di-filter lalu di-skor. Alurnya:
 Top-10 dipilih pakai **hysteresis** (`selectStableTop`, `SWAP_MARGIN=10`) —
 symbol baru harus menang ≥10 poin dari yang terlemah di top-10 buat swap in,
 biar list-nya gak gonjang-ganjing tiap cycle.
+
+### Volume Spike direction gate (v4.3)
+
+`volSpike` (total quote volume candle terakhir vs rata-rata) itu **buta arah**
+by design — Binance klines field `[7]` yang dipakai adalah total volume
+(buy+sell gabung), bukan breakdown per sisi. Sejak v4.3, poin VolSpike
+digate pakai `buyRatioSpike` = taker buy quote volume (`k[spikeIdx][10]`)
+dibagi total volume candle yang sama (`k[spikeIdx][7]`) — **candle spesifik
+yang sama** yang memicu `volSpike`, bukan API call terpisah (data ini udah
+ada di response klines yang sama, jadi zero extra request/rate-limit cost).
+
+- `netRatioSpike = 2·buyRatioSpike − 1` (rentang −1..+1, dinormalisasi biar
+  gak ke-drag magnitude volSpike-nya sendiri)
+- `netRatioSpike > 0.1` (buy-dominant jelas) → poin VolSpike penuh
+- `-0.1 ≤ netRatioSpike ≤ 0.1` (netral/ambigu) → poin VolSpike setengah
+- `netRatioSpike < -0.1` (sell-dominant, candle-nya sebenarnya dump) → 0 poin
+
+Project ini fokus long-only (cari setup pre-explosion ke atas), jadi gate ini
+cuma reward buy-dominance — gak ada logic tandingan buat reward sell-dominance
+versi short. Data `buyRatioSpike`/`netRatioSpike` ikut dicatat di
+`features` payload Signal Performance biar bisa divalidasi lewat win-rate
+riil (apakah sinyal buy-dominant beneran menang lebih sering), bukan cuma
+asumsi teori. `MAX_SCORE_THEORETICAL` gak berubah — ini realokasi poin
+VolSpike yang sudah ada, bukan komponen baru.
 
 ---
 
@@ -181,6 +205,32 @@ yang beneran pump, bukan cuma yang keliatan bagus di skor.
 ---
 
 ## API endpoints
+
+### `GET /api/status`
+Publik, read-only, no-auth. v4.3. Health/status check — cuma buat konfirmasi
+server (deployment + Redis) online, gak nyentuh Binance sama sekali (zero
+biaya ke `MAX_UPSTREAM_PER_SEC`). **Gak bisa** melaporkan status scan
+dashboard — itu state cuma di browser, server gak pernah tau.
+
+```json
+{
+  "ok": true, "version": "v4.3", "time": "2026-08-29T10:00:00.000Z",
+  "redis": { "ok": true, "latencyMs": 42 },
+  "signals": { "pending": 3, "resolved": 187 },
+  "onlineUsers": 5,
+  "proxy": { "staleFallbackHitsLastHour": 0 },
+  "evaluateCron": { "lastRunSecondsAgo": 312, "stale": false },
+  "scope": "server-only — does not reflect dashboard scan/scoring state, which lives in the browser"
+}
+```
+
+- `evaluateCron.stale = true` kalau GitHub Actions cron (`evaluate-signals.js`,
+  seharusnya jalan tiap ~15 menit) gak jalan lebih dari 30 menit — indikasi
+  cron-nya berhenti tanpa disadari.
+- `proxy.staleFallbackHitsLastHour` — berapa kali `binance-proxy.js` kepaksa
+  serve cache lama (rate-limited/Binance error/exception) di jam berjalan.
+  Angka tinggi terus-menerus = upstream Binance atau rate limiter lagi
+  bermasalah.
 
 ### `GET /api/winning-signals`
 Publik, read-only, no-auth. Sinyal yang **terbukti win** + feature lengkap.
@@ -277,6 +327,20 @@ npm install   # cuma @upstash/redis
 - **v4.2** — winning-signal archive permanen (`win:archive:*`) +
   endpoint publik `/api/winning-signals` buat konsumsi eksternal
   (analisis/LLM), feature breakdown lengkap disertakan di tiap sinyal.
+- **v4.3** — VolSpike direction gate: poin Volume Spike sekarang digate
+  pakai `buyRatioSpike`/`netRatioSpike` (taker buy vs total volume di
+  candle spike yang sama, dari klines field `[10]`/`[7]`, zero extra API
+  call). Sell-dominant candle → 0 poin VolSpike, netral → setengah, hanya
+  buy-dominant yang dapat poin penuh. Tujuan: nutup blind spot "volSpike
+  gede padahal itu dump volume", selaras fokus project yang long-only.
+  Data ikut dicatat di Signal Performance `features` buat validasi
+  win-rate. `MAX_SCORE_THEORETICAL` gak berubah (realokasi, bukan
+  komponen baru). VolRamp (di `computeVelocity`) belum digate — ditunda
+  sampai hasil validasi VolSpike ada. Sekalian nambah endpoint publik
+  `/api/status` (health check server, zero cost ke Binance) + 2 metrik
+  murah buat dukung itu: `status:lastEvalRun` (deteksi kalau cron GitHub
+  Actions berhenti jalan) dan counter per-jam stale-fallback di
+  `binance-proxy.js` (deteksi upstream Binance/rate limiter bermasalah).
 
 > Catatan: v5.0–v5.4 (redesign scoring 3-pilar directional) pernah ada
 > tapi di-revert balik ke basis v4.0 — lihat riwayat chat proyek ini

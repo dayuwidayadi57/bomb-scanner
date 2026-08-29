@@ -558,7 +558,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v4.2'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v4.3'; // bump this on meaningful releases — shown in the footer
   // v4.0: Signal Performance tracking — logs every fresh top-N entry
   // (api/log-signal.js), evaluates peak gain + 1h/4h/24h checkpoints via a
   // GitHub Actions-driven cron (api/evaluate-signals.js, since Vercel Hobby
@@ -573,6 +573,17 @@
   const TAKER_RATIO_BOOST_HIGH = 1.4;
   const TAKER_RATIO_BOOST_MID = 1.2;
   const TAKER_RATIO_PENALTY = 0.8;
+
+  // v4.3: per-candle direction gate for VolSpike, derived from klines field
+  // [10] (taker buy quote volume) vs [7] (total quote volume) — the SAME
+  // candle that triggers volSpike, not a separate API call. This is a
+  // ratio (-1..+1), not raw net volume, so it stays independent of the
+  // spike's magnitude (see project notes: raw net-vol re-mixes intensity
+  // back into a direction signal, a ratio does not). Long-only project:
+  // we only reward buy-dominance, we don't score a mirrored short case.
+  const NET_RATIO_BUY_MIN = 0.1;    // above this → clearly buy-dominant, full VolSpike points
+  const NET_RATIO_NEUTRAL_MIN = -0.1; // between this and BUY_MIN → ambiguous, half points
+  // below NET_RATIO_NEUTRAL_MIN → sell-dominant, zero VolSpike points
 
   const OI_HIST_PERIOD = '5m';
   const OI_HIST_LIMIT = 49;
@@ -1249,10 +1260,32 @@
         let score = 0;
         const reasons = [];
 
-        // --- Volume Spike (max 20) ---
-        if (volSpike >= 3){ score += 20; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
-        else if (volSpike >= 2){ score += 12; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
-        else if (volSpike >= 1.5){ score += 6; reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x'); }
+        // --- Volume Spike (max 20), v4.3: gated by per-candle buy/sell direction ---
+        // spikeIdx is the same last-closed candle that lastVol/volSpike use.
+        // buyRatioSpike = taker buy quote vol / total quote vol for THAT candle
+        // (klines field [10] / [7]) — free, already fetched, zero extra API calls.
+        const spikeIdx = vols.length - 2;
+        const spikeVol = vols[spikeIdx];
+        const buyRatioSpike = (spikeVol && spikeVol > 0 && k[spikeIdx] && k[spikeIdx][10] !== undefined)
+          ? parseFloat(k[spikeIdx][10]) / spikeVol
+          : 0.5; // unknown/illiquid candle → neutral, don't punish micro-caps for thin data
+        const netRatioSpike = 2 * buyRatioSpike - 1; // -1 (full sell) .. +1 (full buy)
+
+        let volSpikePts = 0;
+        if (volSpike >= 3) volSpikePts = 20;
+        else if (volSpike >= 2) volSpikePts = 12;
+        else if (volSpike >= 1.5) volSpikePts = 6;
+
+        if (volSpikePts > 0){
+          if (netRatioSpike > NET_RATIO_BUY_MIN){
+            score += volSpikePts;
+            reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x (buy ' + (buyRatioSpike*100).toFixed(0) + '%)');
+          } else if (netRatioSpike >= NET_RATIO_NEUTRAL_MIN){
+            score += Math.round(volSpikePts * 0.5);
+            reasons.push('VolSpike ' + volSpike.toFixed(1) + 'x (netral, dampened)');
+          }
+          // netRatioSpike < NET_RATIO_NEUTRAL_MIN → sell-dominant candle → 0 pts, no reason logged
+        }
 
         // --- Compression: BB width + squeeze duration (max 22) ---
         if (bbWidth && bbWidth < 5){ score += 12; reasons.push('BB ' + bbWidth.toFixed(1) + '%'); }
@@ -1403,7 +1436,8 @@
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
           priceChg1h: priceChg1h, oiFlow: oiFlow,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
-          takerRatio: tr, solid: isSolid, setupTag: setupTag,
+          takerRatio: tr, buyRatioSpike: buyRatioSpike, netRatioSpike: netRatioSpike,
+          solid: isSolid, setupTag: setupTag,
           microCap: isMicroCap, alreadyMoving: alreadyMoving,
           ema100: ema100, aboveEma100: aboveEma100,
           closesSeries: closes.slice(-48), // last 48 hourly candles for the sparkline
@@ -1663,6 +1697,8 @@
             features: {
               fundingRate: r.fr,
               volSpike: r.volSpike,
+              buyRatioSpike: r.buyRatioSpike,
+              netRatioSpike: r.netRatioSpike,
               bbWidth: r.bb,
               rangePct: r.rng,
               takerRatio: r.takerRatio,

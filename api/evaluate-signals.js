@@ -122,6 +122,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    // v4.3: record that this run happened at all, regardless of whether
+    // there was anything to evaluate — this is the ONLY signal /api/status
+    // has for "is the GitHub Actions cron still firing every ~15min", so
+    // it must be set on every successful invocation, not just when there
+    // were pending signals to process. Awaited (not fire-and-forget) —
+    // a serverless function can freeze right after the response is sent,
+    // so an un-awaited write here isn't guaranteed to ever complete.
+    try { await redis.set('status:lastEvalRun', Date.now()); } catch (e) { /* non-fatal */ }
+
     const pendingIds = await redis.zrange('sig:pending', 0, -1);
     if (!pendingIds || pendingIds.length === 0) {
       return res.status(200).json({ evaluated: 0, resolved: 0 });

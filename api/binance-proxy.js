@@ -100,6 +100,21 @@ function resolveRequest(rawPath){
   return null; // not an allowlisted endpoint
 }
 
+// v4.3: cheap, self-expiring hourly counter for how often we had to serve a
+// stale fallback (rate-limited / Binance error / exception) instead of a
+// fresh response. Same rolling-bucket pattern as the rate limiter above —
+// one INCR + one conditional EXPIRE per hit, key auto-expires so it never
+// needs manual cleanup. Read by /api/status to surface "is the proxy
+// degraded right now", not just "is the server reachable at all".
+async function bumpStaleHit(){
+  try {
+    const hourBucket = Math.floor(Date.now() / 3600000);
+    const key = 'stale:hits:' + hourBucket;
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, 7200); // keep 2 buckets worth
+  } catch (e) { /* non-fatal — never let counter failure break the actual fallback */ }
+}
+
 async function readStale(staleKey){
   try {
     const val = await redis.get(staleKey);
@@ -145,6 +160,7 @@ export default async function handler(req, res) {
     if (count > MAX_UPSTREAM_PER_SEC) {
       const stale = await readStale(staleKey);
       if (stale) {
+        await bumpStaleHit();
         res.setHeader('X-Cache', 'STALE-RATE-LIMITED');
         res.setHeader('Cache-Control', 'public, s-maxage=2, stale-while-revalidate=10');
         return res.status(200).json(stale);
@@ -166,6 +182,7 @@ export default async function handler(req, res) {
     if (!upstreamRes.ok) {
       const stale = await readStale(staleKey);
       if (stale) {
+        await bumpStaleHit();
         res.setHeader('X-Cache', 'STALE-UPSTREAM-ERROR');
         res.setHeader('Cache-Control', 'public, s-maxage=2, stale-while-revalidate=10');
         return res.status(200).json(stale);
@@ -188,6 +205,7 @@ export default async function handler(req, res) {
     console.error('binance-proxy error:', err);
     const stale = await readStale(staleKey);
     if (stale) {
+      await bumpStaleHit();
       res.setHeader('X-Cache', 'STALE-EXCEPTION');
       return res.status(200).json(stale);
     }
