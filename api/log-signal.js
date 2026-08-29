@@ -33,7 +33,11 @@ const BINANCE_ORIGIN = 'https://fapi.binance.com';
 const UPSTREAM_TIMEOUT_MS = 8000;
 
 const SYMBOL_RE = /^[A-Z0-9]{3,20}USDT$/;
-const VALID_TIERS = ['blast', 'ember', 'watch'];
+const VALID_TIERS = ['blast', 'ember']; // 'watch' intentionally excluded — too
+                                         // low-conviction to be worth tracking
+                                         // performance for; rejected here as
+                                         // a backstop even if a stale client
+                                         // build still tries to send it
 
 const SIGNAL_COOLDOWN_SECONDS = 6 * 3600;   // don't re-log the same symbol
                                              // more than once per 6h — keeps

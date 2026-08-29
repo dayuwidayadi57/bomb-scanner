@@ -17,7 +17,10 @@ const redis = Redis.fromEnv();
 const WIN_THRESHOLD_PCT = 5;
 const RECENT_LIMIT = 30; // how many recent signals to return for the table
 const HORIZON_KEYS = ['1h', '4h', '24h'];
-const TIERS = ['blast', 'ember', 'watch'];
+const TIERS = ['blast', 'ember']; // 'watch' no longer logged (see log-signal.js) —
+                                   // dropped here too so this endpoint stops
+                                   // computing a bucket that'll only ever
+                                   // reflect old, aging-out data
 
 // --- self-triggered evaluation ---
 // GitHub Actions cron is "best-effort" and can silently run far less often
@@ -134,7 +137,15 @@ export default async function handler(req, res) {
       tierRates[t] = horizonRates(records.filter(r => r.tier === t));
     }
 
+    // Filter out watch tier BEFORE slicing — index.html's table already
+    // drops watch-tier rows (too noisy for the actionable-signal view), so
+    // slicing the full pool first meant a burst of fresh watch signals
+    // could silently starve the table down to fewer than RECENT_LIMIT rows,
+    // even when older actionable (blast/ember) signals existed just outside
+    // the cutoff. Filtering first guarantees the table gets up to
+    // RECENT_LIMIT actionable rows whenever that many exist.
     const recent = records
+      .filter(r => r.tier !== 'watch')
       .sort((a, b) => b.ts - a.ts)
       .slice(0, RECENT_LIMIT)
       .map(r => ({
