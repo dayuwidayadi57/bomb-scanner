@@ -2068,4 +2068,211 @@
     if (typeof show_11668237 === 'function') {
       show_11668237({
         type: 'inApp',
-        inAppSetting
+        inAppSettings: {
+          frequency: 2,
+          capping: 0.1,
+          interval: 30,
+          timeout: 5,
+          everyPage: false
+        }
+      });
+    }
+  }
+
+  // ================= presence (live "user online" counter) =================
+  // Hits our own /api/presence serverless function (Vercel + Upstash Redis)
+  // with a per-tab session id, and reports how many sessions are currently
+  // alive — shown in the footer.
+  //
+  // Cost-saving choices (Upstash free tier = 500K commands/month):
+  //   - Heartbeat every 45s instead of 20s — a bit over 2x fewer requests.
+  //   - Heartbeats PAUSE entirely while the tab is in the background
+  //     (Page Visibility API). A tab sitting unfocused in another window
+  //     doesn't need to keep "voting" itself online every 45s — this is
+  //     usually the single biggest saving in practice, since most open
+  //     tabs are idle in the background most of the time.
+  //   - One heartbeat fires immediately when the tab becomes visible again,
+  //     so the counter feels responsive rather than waiting a full interval.
+  const PRESENCE_HEARTBEAT_MS = 45000; // must stay under half the backend TTL (see presence.js)
+  function getSessionId(){
+    try{
+      let sid = sessionStorage.getItem('bsc_sid');
+      if (!sid){
+        sid = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2)));
+        sessionStorage.setItem('bsc_sid', sid);
+      }
+      return sid;
+    }catch(e){
+      // sessionStorage unavailable (e.g. private mode edge cases) — fall back to an in-memory id
+      return 'anon-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    }
+  }
+  const SESSION_ID = getSessionId();
+  let presenceTimer = null;
+
+  async function pingPresence(){
+    if (!onlineCountEl) return;
+    try{
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+      let res;
+      try{
+        res = await fetch('/api/presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sid: SESSION_ID }),
+          signal: ctrl.signal
+        });
+      } finally {
+        clearTimeout(t);
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const n = (data && typeof data.online === 'number') ? data.online : null;
+      onlineCountEl.textContent = APP_VERSION + ' · User online: ' + (n === null ? 'N/A' : n);
+    }catch(e){
+      // backend not deployed yet, KV not configured, or network hiccup — degrade quietly
+      onlineCountEl.textContent = APP_VERSION + ' · User online: N/A';
+    }
+  }
+
+  function startPresenceHeartbeat(){
+    if (presenceTimer) return; // already running
+    pingPresence();
+    presenceTimer = setInterval(pingPresence, PRESENCE_HEARTBEAT_MS);
+  }
+  function stopPresenceHeartbeat(){
+    if (presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) stopPresenceHeartbeat();
+    else startPresenceHeartbeat(); // fires one immediately, then resumes the interval
+  });
+
+  // ================= signal performance panel =================
+  // Reads api/signal-stats.js (aggregated by api/evaluate-signals.js, which
+  // runs every ~15min via GitHub Actions — see .github/workflows). Refreshed
+  // on its own slower interval since it changes far less often than a scan.
+  const PERF_REFRESH_MS = 5 * 60 * 1000; // 5 min — stats only move on the eval cadence anyway
+  let perfHorizon = '4h';
+  let perfData = null;
+
+  const TIER_LABEL = { blast: '🔥 Blast', ember: '⚡ Ember', watch: '👀 Watch' };
+
+  function fmtPct(v){
+    if (v === null || v === undefined) return '–';
+    return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  }
+  function fmtWinRate(bucket){
+    if (!bucket || bucket.winRate === null) return '<span class="perf-pending">–</span>';
+    const cls = bucket.winRate >= 50 ? 'perf-win' : '';
+    return '<span class="' + cls + '">' + bucket.winRate + '%</span> <span class="perf-pending">(' + bucket.n + ')</span>';
+  }
+
+  function renderPerfPanel(){
+    const body = $('perfBody');
+    if (!perfData){
+      body.innerHTML = '<div class="perf-empty">Loading signal performance…</div>';
+      return;
+    }
+    if (!perfData.totalTracked){
+      body.innerHTML = '<div class="perf-empty">No signals logged yet — check back after the first top-N candidates appear.' +
+        (perfData.pending ? ' (' + perfData.pending + ' signal' + (perfData.pending === 1 ? '' : 's') + ' currently pending.)' : '') + '</div>';
+      return;
+    }
+    const h = perfHorizon;
+    const overall = (perfData.overall && perfData.overall[h]) || { winRate: null, n: 0 };
+    const premium = (perfData.premium && perfData.premium[h]) || { winRate: null, n: 0 };
+
+    let html = '<div class="perf-summary">' +
+      '<div class="perf-cell"><b>' + (overall.winRate === null ? '–' : overall.winRate + '%') + '</b><span>Win rate (' + h + ', all)</span></div>' +
+      '<div class="perf-cell"><b>' + (premium.winRate === null ? '–' : premium.winRate + '%') + '</b><span>Win rate (' + h + ', 💎Premium)</span></div>' +
+      '<div class="perf-cell"><b>' + perfData.totalTracked + '</b><span>Signals tracked (' + perfData.resolvedTotal + ' fully resolved)</span></div>' +
+      '<div class="perf-cell"><b>' + (perfData.avgPeakGain24h === null ? '–' : fmtPct(perfData.avgPeakGain24h)) + '</b><span>Avg peak gain (24h)</span></div>' +
+    '</div>';
+
+    html += '<div class="perf-breakdown">';
+    ['blast','ember'].forEach(function(t){
+      const b = perfData.byTier && perfData.byTier[t] && perfData.byTier[t][h];
+      html += '<span class="chip">' + TIER_LABEL[t] + ': ' + fmtWinRate(b) + '</span>';
+    });
+    html += '</div>';
+
+    // Filter out Watch tier from recent table (too noisy)
+    const actionableRecent = perfData.recent.filter(r => r.tier !== 'watch');
+    if (actionableRecent && actionableRecent.length){
+      html += '<div class="perf-table-wrap"><table class="perf-table"><thead><tr>' +
+        '<th>Symbol</th><th>Tier</th><th>Score</th><th>🔁</th><th>🐣</th>' +
+        '<th>Peak 1h</th><th>Peak 4h</th><th>Peak 24h</th><th>When</th>' +
+      '</tr></thead><tbody>';
+      actionableRecent.forEach(function(r){
+        const tierTxt = (r.premium ? '💎 ' : '') + (TIER_LABEL[r.tier] || r.tier);
+        html += '<tr>' +
+          '<td><b>' + r.sym + '</b></td>' +
+          '<td>' + tierTxt + '</td>' +
+          '<td>' + r.score + '</td>' +
+          '<td>' + (r.streak >= 2 ? 'x' + r.streak : '–') + '</td>' +
+          '<td>' + (r.microCap ? '✓' : '–') + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt1h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt4h) + '</td>' +
+          '<td>' + fmtPct(r.peakGainAt24h) + '</td>' +
+          '<td>' + new Date(r.ts).toLocaleString('en-GB', { hour12: false }) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    body.innerHTML = html;
+  }
+
+  async function loadPerfStats(){
+    try{
+      const res = await fetch('/api/signal-stats');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      perfData = await res.json();
+      if (perfData && typeof perfData.winThresholdPct === 'number'){
+        $('perfThreshold').textContent = '+' + perfData.winThresholdPct + '%';
+      }
+    }catch(e){
+      perfData = perfData || null; // keep last good render if this poll fails
+    }
+    renderPerfPanel();
+  }
+
+  document.querySelectorAll('[data-horizon]').forEach(function(el){
+    el.addEventListener('click', function(){
+      perfHorizon = el.getAttribute('data-horizon');
+      document.querySelectorAll('[data-horizon]').forEach(function(b){ b.classList.toggle('active', b === el); });
+      renderPerfPanel();
+    });
+  });
+
+  // ================= boot =================
+  // v4.4: hydrate the last successful scan (if any, and not too old — see
+  // LAST_SCAN_CACHE_MAX_AGE_MS) so the grid isn't blank while the first
+  // live cycle is in flight. Deliberately does NOT prime `lastShown` for
+  // the live stability logic (selectStableTop/applyStabilityGrace) — that
+  // system is tuned around FRESH cycle-to-cycle continuity, and treating
+  // up-to-30-min-old cached rows as "already shown, protected by
+  // SWAP_MARGIN" would quietly change its behavior. This cache is purely
+  // cosmetic: it's fully replaced (success) or left in place with an error
+  // banner on top (failure) the moment the first real runCycle() settles.
+  const cachedScan = loadLastScanCache();
+  if (cachedScan){
+    renderCards(sortShown(cachedScan.shown));
+    showCacheBanner(cachedScan.ts);
+  }
+  paintSortBar();
+  initTelegram();
+  initAds();
+  runCycle();
+  pollBigPairs();
+  loadPerfStats();
+  if (!document.hidden) startPresenceHeartbeat();
+  setInterval(pollBigPairs, 6000);
+  setInterval(loadPerfStats, PERF_REFRESH_MS);
+})();
+</script>
+
+</body>
+</html>
