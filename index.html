@@ -445,6 +445,8 @@
       </div>
 
       <div class="error-banner" id="errorBanner"></div>
+      <div class="info-banner" id="cacheBanner"></div>
+      <div class="info-banner" id="dataWarningBanner"></div>
       <div class="info-banner" id="hiddenTopBanner"></div>
     </div>
   </section>
@@ -558,7 +560,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v4.3'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v4.4'; // bump this on meaningful releases — shown in the footer
   // v4.0: Signal Performance tracking — logs every fresh top-N entry
   // (api/log-signal.js), evaluates peak gain + 1h/4h/24h checkpoints via a
   // GitHub Actions-driven cron (api/evaluate-signals.js, since Vercel Hobby
@@ -567,6 +569,21 @@
   // selection logic changed.
   const CONCURRENCY = 10;
   const REQ_TIMEOUT_MS = 30000;
+
+  // v4.4: error-handling + browser-cache resilience knobs.
+  // CONSECUTIVE_ERROR_WARN_THRESHOLD: after this many failed cycles in a
+  // row, the error banner escalates from "will retry next cycle" to an
+  // explicit "may be down" message instead of repeating the same soft
+  // message forever.
+  const CONSECUTIVE_ERROR_WARN_THRESHOLD = 3;
+  // A cycle counts as having a meaningful data-completeness problem only
+  // once the candidate pool is large enough that a high miss-rate isn't
+  // just small-sample noise.
+  const DATA_WARN_MIN_CANDIDATES = 20;
+  const DATA_WARN_MISS_RATE = 0.25;
+  const CACHE_KEY_LAST_SCAN = 'bomb_last_scan_v1';
+  const CACHE_KEY_TRADFI = 'bomb_tradfi_cache_v1';
+  const LAST_SCAN_CACHE_MAX_AGE_MS = 30 * 60 * 1000; // older than this isn't worth showing as "last session"
 
   const TAKER_PERIODS = ['1h', '4h'];
   const TAKER_RATIO_FILTER = 0.6;
@@ -689,6 +706,8 @@
   const countdownValue = $('countdownValue');
   const dialProgress = $('dialProgress');
   const errorBanner = $('errorBanner');
+  const cacheBanner = $('cacheBanner');
+  const dataWarningBanner = $('dataWarningBanner');
   const hiddenTopBanner = $('hiddenTopBanner');
   const cardGrid = $('cardGrid');
   const tickerTrack = $('tickerTrack');
@@ -697,6 +716,55 @@
   const onlineCountEl = $('onlineCount');
 
   const DIAL_CIRC = 2 * Math.PI * 42; // matches r=42 on the dial circle
+
+  // ================= v4.4: browser-side resilience cache =================
+  // Before v4.4, EVERYTHING lived only in memory — top-10, streaks, the
+  // TradFi symbol set — so a page reload always started from a completely
+  // blank dashboard, even if Binance/the proxy were perfectly healthy a
+  // second later. These two localStorage-backed caches fix that:
+  //  1) last-scan snapshot — so a reload shows the last good top-10
+  //     immediately instead of an empty grid while the first live cycle
+  //     runs, clearly labeled as cached (see cacheBanner below).
+  //  2) TradFi symbol set — so a cold-start exchangeInfo failure doesn't
+  //     leave tradfiCache empty for the rest of the session (previously:
+  //     empty cache + failed fetch = TradFi symbols silently NOT excluded
+  //     from candidates until the next successful refresh).
+  // Every read is wrapped and schema-checked (`v: 1`) so a corrupted or
+  // future-format entry is ignored rather than crashing boot; localStorage
+  // itself can throw (private-mode edge cases, quota, disabled storage),
+  // so every access goes through safeLSGet/safeLSSet.
+  function safeLSGet(key){
+    try{ return localStorage.getItem(key); }catch(e){ return null; }
+  }
+  function safeLSSet(key, val){
+    try{ localStorage.setItem(key, val); }catch(e){ /* unavailable/full — degrade silently, caching is a nicety */ }
+  }
+  function saveLastScanCache(shown){
+    if (!shown || !shown.length) return;
+    safeLSSet(CACHE_KEY_LAST_SCAN, JSON.stringify({ v: 1, ts: Date.now(), shown: shown }));
+  }
+  function loadLastScanCache(){
+    const raw = safeLSGet(CACHE_KEY_LAST_SCAN);
+    if (!raw) return null;
+    try{
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.shown) || !parsed.shown.length) return null;
+      if (!parsed.ts || (Date.now() - parsed.ts) > LAST_SCAN_CACHE_MAX_AGE_MS) return null;
+      return parsed;
+    }catch(e){ return null; }
+  }
+  function saveTradfiCache(cache){
+    safeLSSet(CACHE_KEY_TRADFI, JSON.stringify({ v: 1, ts: cache.ts, symbols: Array.from(cache.symbols) }));
+  }
+  function loadTradfiCache(){
+    const raw = safeLSGet(CACHE_KEY_TRADFI);
+    if (!raw) return null;
+    try{
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.v !== 1 || !Array.isArray(parsed.symbols)) return null;
+      return { symbols: new Set(parsed.symbols), ts: parsed.ts || 0 };
+    }catch(e){ return null; }
+  }
 
   let lastShown = [];   // for hysteresis, array of symbols
   let streaks = {};     // symbol -> how many consecutive cycles it's been shown
@@ -721,21 +789,79 @@
   const STABILITY_GRACE_CYCLES = 2; // cycles a shown symbol may be absent before it's dropped for real
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
-  let tradfiCache = { symbols: new Set(), ts: 0 };
+  let consecutiveErrors = 0; // v4.4: how many runCycle()s have failed in a row — resets to 0 on any success
+  // v4.4: hydrate from localStorage so a page reload (or a fresh exchangeInfo
+  // fetch failing right after reload) doesn't start from a genuinely empty
+  // TradFi set. loadTradfiCache() returns null on no/corrupt/unreadable
+  // entry, in which case behavior is identical to before v4.4.
+  let tradfiCache = loadTradfiCache() || { symbols: new Set(), ts: 0 };
   let topMoverSym = null; // today's top % gainer (USDT-M futures, volume-filtered)
   let topLoserSym = null; // today's top % loser (USDT-M futures, volume-filtered)
 
   // ================= helpers =================
-  async function fetchJSON(url){
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
-    try{
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return await res.json();
-    } finally {
+  function sleep(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
+
+  // v4.4: typed, optionally-retried fetch.
+  //
+  // By default (no `retries` option) this behaves EXACTLY like the pre-v4.4
+  // version — one attempt, throws on any failure. That's deliberate: every
+  // per-candidate call site (fetchOIMap/fetchKlinesMap/fetchTakerMap, all
+  // driven through mapLimit across up to MAX_CANDIDATES symbols) is left
+  // untouched, because retrying THOSE would multiply an already
+  // concurrency-bounded worst case by the retry count — turning a full
+  // Binance/proxy outage from a ~few-minutes-long stalled cycle into one
+  // several times longer, for zero benefit (a genuine outage fails the
+  // retry too). Retries are opt-in (`{retries: N}`) and used only for the
+  // handful of single-shot, cycle-critical calls (ticker/24hr,
+  // premiumIndex, exchangeInfo) where today ONE transient blip aborts the
+  // entire cycle instantly with no recourse at all.
+  //
+  // Thrown errors carry `.kind` — one of 'timeout' | 'network' |
+  // 'rate_limit' | 'server' | 'http' | 'parse' — so callers (mainly
+  // runCycle's catch, via describeCycleError()) can give an honest,
+  // specific reason instead of guessing "CORS or rate-limit or something".
+  // Only timeout/network/rate_limit(429)/server(5xx) are retried; a plain
+  // 4xx or a JSON-parse failure means retrying the identical request would
+  // just repeat the same failure, so those are never retried.
+  async function fetchJSON(url, opts){
+    const maxRetries = (opts && opts.retries) || 0;
+    const retryBaseMs = (opts && opts.retryBaseMs) || 400;
+    let lastErr = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++){
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+      let res;
+      try{
+        res = await fetch(url, { signal: ctrl.signal });
+      }catch(e){
+        clearTimeout(t);
+        const kind = (e && e.name === 'AbortError') ? 'timeout' : 'network';
+        lastErr = Object.assign(
+          new Error(kind === 'timeout' ? ('Request timed out after ' + (REQ_TIMEOUT_MS/1000) + 's') : ((e && e.message) || 'Network error')),
+          { kind: kind }
+        );
+        if (attempt < maxRetries){ await sleep(retryBaseMs * Math.pow(2, attempt)); continue; }
+        throw lastErr;
+      }
       clearTimeout(t);
+      if (!res.ok){
+        const kind = res.status === 429 ? 'rate_limit' : (res.status >= 500 ? 'server' : 'http');
+        lastErr = Object.assign(new Error('HTTP ' + res.status), { kind: kind, status: res.status });
+        if ((kind === 'rate_limit' || kind === 'server') && attempt < maxRetries){
+          await sleep(retryBaseMs * Math.pow(2, attempt));
+          continue;
+        }
+        throw lastErr;
+      }
+      try{
+        return await res.json();
+      }catch(parseErr){
+        // never retried — a 200 with unparseable JSON will parse the same
+        // way again; the identical request won't fix that
+        throw Object.assign(new Error('Bad JSON response'), { kind: 'parse' });
+      }
     }
+    throw lastErr || Object.assign(new Error('fetchJSON failed'), { kind: 'unknown' });
   }
 
   async function mapLimit(items, limit, fn){
@@ -831,14 +957,15 @@
       return tradfiCache.symbols;
     }
     try{
-      const data = await fetchJSON(proxied('/fapi/v1/exchangeInfo'));
+      const data = await fetchJSON(proxied('/fapi/v1/exchangeInfo'), { retries: 2 });
       const syms = new Set((data.symbols || [])
         .filter(s => s.contractType === 'TRADIFI_PERPETUAL')
         .map(s => s.symbol));
       tradfiCache = { symbols: syms, ts: now };
+      saveTradfiCache(tradfiCache); // v4.4: persist so a reload doesn't start from an empty set
       return syms;
     }catch(e){
-      return tradfiCache.symbols; // fall back to old cache if fetch fails
+      return tradfiCache.symbols; // fall back to old (possibly localStorage-hydrated) cache if fetch fails
     }
   }
 
@@ -1143,8 +1270,8 @@
 
   async function scanOnce(){
     const results0 = await Promise.all([
-      fetchJSON(proxied('/fapi/v1/ticker/24hr')),
-      fetchJSON(proxied('/fapi/v1/premiumIndex')).catch(function(){ return []; })
+      fetchJSON(proxied('/fapi/v1/ticker/24hr'), { retries: 2 }),
+      fetchJSON(proxied('/fapi/v1/premiumIndex'), { retries: 2 }).catch(function(){ return []; })
     ]);
     const tickerArr = results0[0], fundingArr = results0[1];
 
@@ -1222,6 +1349,16 @@
       fetchTakerMap(candidates)
     ]);
     const klinesMap = parRes[0], takerMap = parRes[1];
+
+    // v4.4: klines is the heaviest-weighted, most-relied-on per-candidate
+    // fetch (scoring hard-skips any symbol without it, a couple lines
+    // below) — count how many candidates entered this stage but came back
+    // without klines data, as a proxy for "the proxy/Binance is degraded
+    // this cycle" vs. "candidates were legitimately filtered out". Passed
+    // back to runCycle so it can show a soft, non-blocking warning instead
+    // of the user having to guess why the top-N looks thin.
+    const candidatesForScoring = candidates.length;
+    const missingKlinesCount = candidates.filter(function(sym){ return !klinesMap[sym]; }).length;
 
     candidates = candidates.filter(sym => {
       const tr = takerMap[sym];
@@ -1451,7 +1588,10 @@
     }
 
     results.sort((a,b) => b.score - a.score);
-    return { results: results, scannedCount: scannedCount, candidateCount: candidates.length };
+    return {
+      results: results, scannedCount: scannedCount, candidateCount: candidates.length,
+      candidatesForScoring: candidatesForScoring, missingKlinesCount: missingKlinesCount
+    };
   }
   // ================= sort =================
   // user-facing sort over the already-selected stable top N
@@ -1618,6 +1758,9 @@
   function fmtPctTick(n){ const v = parseFloat(n); const sign = v >= 0 ? '+' : '−'; const cls = v >= 0 ? 'tick-up' : 'tick-dn'; const abs = Math.abs(v).toFixed(2); return '<span class="tick-pct ' + cls + '">' + sign + abs + '%</span>'; }
 
   // live BTCUSDT & ETHUSDT + top mover/loser ticker — independent poll every 6s
+  let pollBigPairsFailStreak = 0; // v4.4: silent to the UI by design (this is a cosmetic ticker, not core
+                                   // data) — but a long silent failure streak is exactly the kind of thing
+                                   // that's invisible without SOME trace, so it's logged past a threshold.
   async function pollBigPairs(){
     try {
       const syms = ['BTCUSDT', 'ETHUSDT'];
@@ -1637,8 +1780,16 @@
         else if (t.symbol === topLoserSym) tag = '<span class="tick-tag">🩸 LOSER</span> ';
         return tag + '<b>' + base + '</b> $' + fmtPriceTick(px) + ' ' + fmtPctTick(pct);
       });
-      if (items.length) setTicker(items);
-    } catch(e){ /* silent — keep last good ticker */ }
+      if (items.length){ setTicker(items); pollBigPairsFailStreak = 0; }
+    } catch(e){
+      // still silent to the UI — keep last good ticker, don't add banner
+      // noise for a cosmetic component — but surface a console trace once
+      // it's clearly not a one-off blip, for anyone actually debugging.
+      pollBigPairsFailStreak++;
+      if (pollBigPairsFailStreak === CONSECUTIVE_ERROR_WARN_THRESHOLD){
+        console.warn('pollBigPairs: ' + pollBigPairsFailStreak + ' consecutive failures — ticker band is stale.', e);
+      }
+    }
   }
 
   function showError(msg){
@@ -1649,6 +1800,51 @@
     errorBanner.classList.remove('show');
   }
 
+  // v4.4: honest, specific failure reasons instead of the old catch-all
+  // "Likely CORS, rate-limit, or a connection issue" guess. `e.kind` comes
+  // from fetchJSON's classification; a MISSING `.kind` means the error was
+  // thrown by our own code somewhere in the pipeline (a real bug), which
+  // is called out explicitly rather than blamed on Binance.
+  function describeCycleError(e, streak){
+    const kind = e && e.kind;
+    let reason;
+    if (kind === 'timeout') reason = 'request to the proxy timed out (' + (REQ_TIMEOUT_MS/1000) + 's)';
+    else if (kind === 'rate_limit') reason = 'rate-limited (HTTP 429) even after retrying';
+    else if (kind === 'server') reason = 'proxy/Binance server error even after retrying';
+    else if (kind === 'network') reason = 'network connection issue';
+    else if (kind === 'parse') reason = 'proxy returned an unreadable (non-JSON) response';
+    else if (kind === 'http') reason = (e && e.message) || 'request failed';
+    else reason = 'unexpected error — ' + (e && e.message ? e.message : 'unknown') + ' (likely a bug, not Binance)';
+    let msg = 'Scan cycle failed: ' + reason + '.';
+    msg += streak >= CONSECUTIVE_ERROR_WARN_THRESHOLD
+      ? (' Failed ' + streak + ' cycles in a row — Binance or the proxy may be down.')
+      : ' Will retry automatically next cycle.';
+    msg += ' Still showing last good data below.';
+    return msg;
+  }
+
+  function showDataWarning(msg){
+    dataWarningBanner.textContent = '⚠ ' + msg;
+    dataWarningBanner.classList.add('show');
+  }
+  function clearDataWarning(){
+    dataWarningBanner.classList.remove('show');
+  }
+
+  // v4.4: shown once at boot if a last-scan snapshot was hydrated from
+  // localStorage, and cleared the moment the first LIVE cycle succeeds —
+  // this is purely a "don't show a blank grid while today's first fetch is
+  // in flight" affordance, never a substitute for live data.
+  function showCacheBanner(ts){
+    const ageSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    const ageStr = ageSec < 60 ? (ageSec + 's') : (Math.round(ageSec / 60) + 'm');
+    cacheBanner.textContent = '📦 Showing cached results from ' + ageStr + ' ago (last session) while the live scan loads…';
+    cacheBanner.classList.add('show');
+  }
+  function clearCacheBanner(){
+    cacheBanner.classList.remove('show');
+  }
+
   // ================= cycle control =================
   async function runCycle(){
     if (scanning) return;
@@ -1656,10 +1852,26 @@
     $('scanNowBtn').disabled = true;
     setStatus('scanning', 'Scanning…');
     clearError();
+    clearDataWarning();
     const t0 = performance.now();
     try{
       const scanRes = await scanOnce();
       const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount;
+
+      // v4.4: soft, non-blocking heads-up when a large chunk of this
+      // cycle's candidates came back without klines data — almost always
+      // means the proxy/Binance is degraded, not that the market is quiet.
+      // Never blocks rendering; small candidate pools are exempt so a
+      // normal quiet-market cycle doesn't trip it on tiny-sample noise.
+      if (scanRes.candidatesForScoring >= DATA_WARN_MIN_CANDIDATES){
+        const missRate = scanRes.missingKlinesCount / scanRes.candidatesForScoring;
+        if (missRate > DATA_WARN_MISS_RATE){
+          showDataWarning(scanRes.missingKlinesCount + '/' + scanRes.candidatesForScoring +
+            ' candidates (' + Math.round(missRate * 100) + '%) came back without klines data this cycle — ' +
+            'proxy or Binance may be degraded. Top-N may be less complete than usual.');
+        }
+      }
+
       const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
       // order matters: read the grace cache (built from PRIOR cycles)
       // before updateStabilityCache mutates it for the NEXT cycle
@@ -1746,9 +1958,13 @@
       // ticker band now driven by pollBigPairs() — BTC, ETH, top mover & top loser live prices
 
       setStatus('live', 'Live');
+      consecutiveErrors = 0; // v4.4: this cycle succeeded — any prior failure streak is over
+      clearCacheBanner();    // live data has landed — the boot-time "cached from last session" note no longer applies
+      saveLastScanCache(shown); // v4.4: persist so a reload shows this instead of a blank grid
     }catch(e){
       console.error(e);
-      showError('Failed to fetch data from Binance (' + (e.message || 'unknown error') + '). Likely CORS, rate-limit, or a connection issue. Will retry automatically next cycle.');
+      consecutiveErrors++;
+      showError(describeCycleError(e, consecutiveErrors));
       setStatus('error', 'Error — retrying next cycle');
     }finally{
       scanning = false;
@@ -2026,6 +2242,20 @@
   });
 
   // ================= boot =================
+  // v4.4: hydrate the last successful scan (if any, and not too old — see
+  // LAST_SCAN_CACHE_MAX_AGE_MS) so the grid isn't blank while the first
+  // live cycle is in flight. Deliberately does NOT prime `lastShown` for
+  // the live stability logic (selectStableTop/applyStabilityGrace) — that
+  // system is tuned around FRESH cycle-to-cycle continuity, and treating
+  // up-to-30-min-old cached rows as "already shown, protected by
+  // SWAP_MARGIN" would quietly change its behavior. This cache is purely
+  // cosmetic: it's fully replaced (success) or left in place with an error
+  // banner on top (failure) the moment the first real runCycle() settles.
+  const cachedScan = loadLastScanCache();
+  if (cachedScan){
+    renderCards(sortShown(cachedScan.shown));
+    showCacheBanner(cachedScan.ts);
+  }
   paintSortBar();
   initTelegram();
   initAds();

@@ -5,7 +5,7 @@ bukan sekadar gerak sembarang arah. Dashboard live di browser, tanpa backend
 berat: cuma serverless functions (Vercel) + Redis (Upstash) buat rate-limit,
 presence counter, dan tracking performa sinyal.
 
-**Versi saat ini: v4.2**
+**Versi saat ini: v4.4**
 
 ---
 
@@ -15,6 +15,7 @@ presence counter, dan tracking performa sinyal.
 - [Struktur file](#struktur-file)
 - [Sistem scoring](#sistem-scoring)
 - [Stability grace (anti-flapping top-10)](#stability-grace-anti-flapping-top-10)
+- [Error handling & browser cache (v4.4)](#error-handling--browser-cache-v44)
 - [Signal Performance (win-rate tracker)](#signal-performance-win-rate-tracker)
 - [Winning-signal archive](#winning-signal-archive)
 - [API endpoints](#api-endpoints)
@@ -166,6 +167,55 @@ halaman = grace window reset.
 
 ---
 
+## Error handling & browser cache (v4.4)
+
+**Error handling:**
+- `fetchJSON()` sekarang mengklasifikasi tiap kegagalan (`timeout` /
+  `network` / `rate_limit` / `server` / `http` / `parse`) lewat properti
+  `.kind` di error yang dilempar, dan bisa retry dengan backoff — tapi
+  **opt-in** (`fetchJSON(url, {retries: 2})`), cuma dipasang di 3 panggilan
+  single-shot yang kritis per cycle: `ticker/24hr`, `premiumIndex`,
+  `exchangeInfo`. Fetch per-kandidat (`fetchOIMap`/`fetchKlinesMap`/
+  `fetchTakerMap`, bisa sampai `MAX_CANDIDATES` panggilan per cycle)
+  **sengaja tidak diretry** — retry di situ akan mengalikan worst-case full
+  outage (udah dibatasi `CONCURRENCY`) dengan jumlah retry, bikin outage
+  yang tadinya beberapa menit jadi berpuluh menit tanpa manfaat (outage
+  beneran bikin retry-nya gagal juga).
+- Error banner sekarang kasih alasan spesifik sesuai `.kind` (timeout /
+  rate-limit / server error / respons gak valid / bug asli di kode kita),
+  bukan tebakan generik "CORS/rate-limit/koneksi" kayak sebelumnya.
+- `consecutiveErrors` dilacak di `runCycle()` — kalau gagal
+  `CONSECUTIVE_ERROR_WARN_THRESHOLD` (3) cycle beruntun, pesan eskalasi
+  jadi "Binance/proxy may be down" alih-alih ngulang pesan soft yang sama.
+- Banner baru `dataWarningBanner`: warning non-blocking kalau porsi
+  kandidat yang balik tanpa data klines > `DATA_WARN_MISS_RATE` (25%)
+  dalam satu cycle (indikasi proxy/Binance degraded, bukan cuma market
+  sepi) — cuma aktif kalau jumlah kandidat cukup besar
+  (`DATA_WARN_MIN_CANDIDATES = 20`) biar gak false-positive di sample
+  kecil.
+
+**Browser cache:**
+- Snapshot top-10 hasil scan terakhir dipersist ke `localStorage`
+  (`bomb_last_scan_v1`, TTL `LAST_SCAN_CACHE_MAX_AGE_MS` = 30 menit). Saat
+  halaman di-reload, dashboard langsung render snapshot ini + banner
+  "📦 cached from last session" sampai cycle live pertama sukses — jadi
+  gak ada lagi grid kosong pas nunggu fetch pertama.
+- `tradfiCache` (symbol yang di-exclude karena TradFi perpetual) juga
+  dipersist ke `localStorage` (`bomb_tradfi_cache_v1`). Sebelumnya cache
+  ini reset total tiap reload — kalau `exchangeInfo` gagal pas cold-start,
+  filter TradFi diam-diam gak jalan sampai fetch berikutnya sukses.
+- Kedua cache dibungkus try/catch penuh (localStorage bisa throw di private
+  mode/quota penuh/storage disabled) dan divalidasi versi/schema
+  (`v: 1`) sebelum dipakai, jadi entry corrupt atau format lama gak bisa
+  bikin boot crash.
+- **Sengaja tidak** ikut mempengaruhi `lastShown` yang dipakai
+  `selectStableTop()`/`applyStabilityGrace()` — snapshot cache murni buat
+  tampilan awal, biar gak diam-diam mengubah behavior stability grace yang
+  sudah stabil dengan menganggap baris berumur sampai 30 menit sebagai
+  "udah shown, dilindungi SWAP_MARGIN".
+
+---
+
 ## Signal Performance (win-rate tracker)
 
 Setiap symbol yang baru masuk top-10 di-log via `/api/log-signal.js`
@@ -302,9 +352,14 @@ npm install   # cuma @upstash/redis
 
 ## Known limitations
 
-- Semua state dashboard (top-10, streak, stability grace) cuma di memory
-  browser — refresh = reset total, gak ada riwayat scan yang bisa ditengok
-  ulang di luar Signal Performance / winning-signal archive.
+- Sejak v4.4, snapshot top-10 terakhir dipersist ke `localStorage`
+  (`bomb_last_scan_v1`, TTL 30 menit) jadi refresh gak lagi nampilin grid
+  kosong — tapi ini cuma tampilan sementara sambil cycle live pertama
+  jalan, murni kosmetik. Streak, stability grace, dan seluruh state
+  scoring live tetap cuma di memory browser dan reset total tiap reload
+  (dengan sengaja — lihat catatan v4.4 di riwayat versi), gak ada riwayat
+  scan yang bisa ditengok ulang di luar Signal Performance / winning-signal
+  archive.
 - Filter taker ratio (`TAKER_RATIO_FILTER = 0.6`) masih hard-exclude,
   berpotensi buang setup squeeze murni yang taker ratio-nya sesaat di
   bawah threshold (mitigasi sebagian lewat stability grace v4.1, tapi
@@ -341,6 +396,25 @@ npm install   # cuma @upstash/redis
   murah buat dukung itu: `status:lastEvalRun` (deteksi kalau cron GitHub
   Actions berhenti jalan) dan counter per-jam stale-fallback di
   `binance-proxy.js` (deteksi upstream Binance/rate limiter bermasalah).
+
+- **v4.4** — fokus stabilitas, gak ada perubahan scoring/seleksi:
+  1) **Error handling** — `fetchJSON()` sekarang mengklasifikasi kegagalan
+     (`timeout`/`network`/`rate_limit`/`server`/`http`/`parse`) dan
+     mendukung retry-with-backoff opt-in, dipasang cuma di 3 panggilan
+     single-shot kritis per cycle (`ticker/24hr`, `premiumIndex`,
+     `exchangeInfo`) — fetch per-kandidat sengaja TIDAK diretry (lihat
+     alasan di § Error handling & browser cache). Error banner sekarang
+     kasih alasan spesifik per jenis kegagalan + eskalasi pesan kalau
+     gagal 3 cycle beruntun (`consecutiveErrors`). Banner baru
+     `dataWarningBanner` buat warning non-blocking saat >25% kandidat
+     kehilangan data klines dalam satu cycle.
+  2) **Browser cache** — snapshot top-10 terakhir & TradFi symbol set
+     dipersist ke `localStorage` (masing-masing `bomb_last_scan_v1` TTL 30
+     menit, `bomb_tradfi_cache_v1`), jadi reload halaman langsung nampilin
+     data terakhir (banner "📦 cached from last session") alih-alih grid
+     kosong, dan cold-start gak lagi kehilangan filter TradFi kalau
+     `exchangeInfo` gagal fetch pertama kali. Cache ini sengaja TIDAK ikut
+     mempengaruhi `lastShown`/stability grace — murni tampilan awal.
 
 > Catatan: v5.0–v5.4 (redesign scoring 3-pilar directional) pernah ada
 > tapi di-revert balik ke basis v4.0 — lihat riwayat chat proyek ini
