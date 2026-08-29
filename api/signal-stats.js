@@ -14,7 +14,7 @@ import { Redis } from '@upstash/redis';
 
 const redis = Redis.fromEnv();
 
-const WIN_THRESHOLD_PCT = 10;
+const WIN_THRESHOLD_PCT = 5;
 const RECENT_LIMIT = 30; // how many recent signals to return for the table
 const HORIZON_KEYS = ['1h', '4h', '24h'];
 const TIERS = ['blast', 'ember', 'watch'];
