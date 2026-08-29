@@ -1408,8 +1408,8 @@
         const hasCompression = squeezeLen >= 2;
         const hasAccumulation = oiChg1h !== null && oiChg1h > ACCUM_OI_CHG_MIN;
         if (!hasCompression && !hasAccumulation){
-          score -= 10; // flat penalty instead of x0.6 multiplier
-          reasons.push('No sqz/accum (-10)');
+          score -= 5; // flat penalty instead of x0.6 multiplier
+          reasons.push('No sqz/accum (-5)');
         }
 
         // v3.2: separate gate — if the coin has already sprinted in the last
@@ -1422,8 +1422,8 @@
           || (pct24 !== null && Math.abs(pct24) > PCT_SOFT_MAX)
           || (rngPct > RANGE_SOFT_MAX);
         if (alreadyMoving){
-          score -= 15; // flat penalty instead of x0.5 multiplier
-          reasons.push('Already moving (-15)');
+          score -= 8; // flat penalty instead of x0.5 multiplier
+          reasons.push('Already moving (-8)');
         }
         const isMicroCap = qv < VOL_MIN_FULL;
 
