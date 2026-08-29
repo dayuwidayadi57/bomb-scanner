@@ -19,11 +19,52 @@ const RECENT_LIMIT = 30; // how many recent signals to return for the table
 const HORIZON_KEYS = ['1h', '4h', '24h'];
 const TIERS = ['blast', 'ember', 'watch'];
 
+// --- self-triggered evaluation ---
+// GitHub Actions cron is "best-effort" and can silently run far less often
+// than scheduled (documented GitHub platform behavior, not a config bug —
+// see chat). Instead of depending on that alone, every real hit to this
+// dashboard-facing endpoint has a chance to kick /api/evaluate-signals
+// itself, guarded by a short SETNX cooldown so N concurrent visitors only
+// trigger ONE eval call, not N. This makes evaluation piggyback on actual
+// site traffic — self-healing, no external service required. The GitHub
+// Actions workflow can stay as a low-traffic-hours safety net.
+const AUTO_EVAL_COOLDOWN_SECONDS = 5 * 60; // don't re-trigger more than once per 5 min
+
+async function maybeTriggerEval(req) {
+  try {
+    const secret = process.env.EVAL_SECRET;
+    const host = req.headers.host;
+    if (!secret || !host) return; // not configured — skip silently, stats still work
+
+    const claimed = await redis.set('sig:autoeval:lock', '1', { nx: true, ex: AUTO_EVAL_COOLDOWN_SECONDS });
+    if (!claimed) return; // another recent request already triggered this
+
+    const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000); // leave stats response unblocked either way
+    try {
+      await fetch(proto + '://' + host + '/api/evaluate-signals', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + secret },
+        signal: ctrl.signal
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (e) {
+    // non-fatal — the stats endpoint must never fail because of this
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'method not allowed' });
+
+  // Fire-and-forget-ish: awaited so the serverless function doesn't get
+  // frozen mid-flight, but failures here never block or fail this request.
+  await maybeTriggerEval(req);
 
   try {
     // Pull from BOTH sig:pending and sig:resolved. A record only needs its
