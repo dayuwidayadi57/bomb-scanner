@@ -42,6 +42,57 @@ const HORIZONS = [
 const MAX_HORIZON_SECONDS = 24 * 3600; // signal fully resolves after this
 const RESOLVED_KEEP = 500;             // trim sig:resolved to the most recent N
 
+// --- long-term winning-signal archive ---
+// sig:data/sig:pending/sig:resolved are operational state for the LIVE
+// dashboard — bounded to 35 days on purpose, so the keyspace doesn't grow
+// forever. That's the wrong retention policy for a training-data archive:
+// a signal that proved to win shouldn't quietly expire before anyone gets
+// to learn from it. So the moment a horizon checkpoint crosses the win
+// threshold, we additionally write a PERMANENT, immutable copy into a
+// separate keyspace (win:archive:*) with NO time-based TTL — only bounded
+// by count (WIN_ARCHIVE_KEEP per horizon), trimmed oldest-first, same as
+// RESOLVED_KEEP above but decoupled so tuning one never affects the other.
+// keep in sync with WIN_THRESHOLD_PCT in signal-stats.js / winning-signals.js
+const WIN_THRESHOLD_PCT = 5;
+const WIN_ARCHIVE_KEEP = 5000; // per horizon — generous headroom, still tiny on disk
+
+function archiveWinIfQualifies(pipeline, rec, horizonKey, gainVal, changeVal, now) {
+  if (gainVal == null || gainVal < WIN_THRESHOLD_PCT) return;
+  const archiveId = rec.sym + ':' + rec.ts + ':' + horizonKey;
+  const archiveRecord = {
+    sym: rec.sym, ts: rec.ts, entryPrice: rec.entryPrice,
+    score: rec.score, tier: rec.tier, premium: rec.premium,
+    microCap: rec.microCap, streak: rec.streak,
+    features: rec.features || null,
+    horizon: horizonKey, thresholdPct: WIN_THRESHOLD_PCT,
+    peakGainPct: gainVal, changeAtHorizonPct: changeVal,
+    archivedAt: now
+  };
+  // NOTE: no `ex` — this key is meant to persist. Growth is bounded by
+  // the count-based trim in trimWinArchive(), not by time.
+  pipeline.set('win:archive:' + archiveId, JSON.stringify(archiveRecord));
+  pipeline.zadd('win:archive:idx:' + horizonKey, { score: rec.ts, member: archiveId });
+}
+
+// Runs AFTER the main pipeline so it sees the true post-write index size.
+// Fetches which ids fall beyond the keep-count (oldest first), deletes
+// their data keys explicitly (no TTL means nothing else will ever clean
+// them up), then trims the index itself.
+async function trimWinArchive() {
+  for (const h of HORIZONS) {
+    const idxKey = 'win:archive:idx:' + h.key;
+    const total = await redis.zcard(idxKey);
+    if (total <= WIN_ARCHIVE_KEEP) continue;
+    const overflowCount = total - WIN_ARCHIVE_KEEP;
+    const overflowIds = await redis.zrange(idxKey, 0, overflowCount - 1);
+    if (!overflowIds || overflowIds.length === 0) continue;
+    const trimPipeline = redis.pipeline();
+    overflowIds.forEach(id => trimPipeline.del('win:archive:' + id));
+    trimPipeline.zremrangebyrank(idxKey, 0, overflowIds.length - 1);
+    await trimPipeline.exec();
+  }
+}
+
 async function fetchAllPrices() {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
@@ -110,6 +161,10 @@ export default async function handler(req, res) {
         if (rec[gainKey] == null && elapsedSec >= h.seconds) {
           rec[gainKey] = rec.peakGain;
           rec[changeKey] = pctChange;
+          // this is the ONE moment this horizon's outcome is frozen —
+          // archive it here (not later) so a signal only ever gets
+          // archived once per horizon, right when its checkpoint is set
+          archiveWinIfQualifies(pipeline, rec, h.key, rec[gainKey], rec[changeKey], now);
         }
       }
 
@@ -129,6 +184,11 @@ export default async function handler(req, res) {
     pipeline.zremrangebyrank('sig:resolved', 0, -1 - RESOLVED_KEEP);
 
     await pipeline.exec();
+
+    // Separate pass, after the main write — trims win:archive:* back down
+    // to WIN_ARCHIVE_KEEP per horizon if this run pushed it over. Kept out
+    // of the main pipeline since it needs to read index size first.
+    await trimWinArchive();
 
     return res.status(200).json({ evaluated: evaluated, resolved: resolvedCount, pending: pendingIds.length });
   } catch (err) {

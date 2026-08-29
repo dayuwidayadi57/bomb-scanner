@@ -558,7 +558,7 @@
   const MAX_CANDIDATES = 140;       // widened slightly since more candidates now survive pre-filter
   const TOP_N = 10;
   const SWAP_MARGIN = 10;
-  const APP_VERSION = 'v4.0'; // bump this on meaningful releases — shown in the footer
+  const APP_VERSION = 'v4.2'; // bump this on meaningful releases — shown in the footer
   // v4.0: Signal Performance tracking — logs every fresh top-N entry
   // (api/log-signal.js), evaluates peak gain + 1h/4h/24h checkpoints via a
   // GitHub Actions-driven cron (api/evaluate-signals.js, since Vercel Hobby
@@ -689,6 +689,25 @@
 
   let lastShown = [];   // for hysteresis, array of symbols
   let streaks = {};     // symbol -> how many consecutive cycles it's been shown
+
+  // v4.1 bugfix: a symbol that was in the shown top-N can vanish from
+  // `results` entirely on a given cycle for reasons that have nothing to
+  // do with its score dropping — a transient taker-ratio dip below
+  // TAKER_RATIO_FILTER, OI briefly crossing OI_MAX, a proxy hiccup that
+  // failed its klines fetch, or losing the MAX_CANDIDATES budget race.
+  // Previously selectStableTop() treated "missing from results" the same
+  // as "lost the score contest": the vacated slot got filled by whatever
+  // symbol was next in line, with NO SWAP_MARGIN check at all — so a
+  // symbol that scored 60 last cycle could be silently replaced by one
+  // scoring 40 this cycle, without ever losing a fair fight.
+  // lastKnownRows caches each shown symbol's last-seen row + how many
+  // consecutive cycles it's been missing from `results`. While within
+  // STABILITY_GRACE_CYCLES, selectStableTop() is fed the cached row so
+  // the symbol keeps competing under the normal margin rule instead of
+  // being evicted by default.
+  let lastKnownRows = {};      // sym -> last full result row seen
+  let missingStreak = {};      // sym -> consecutive cycles absent from results
+  const STABILITY_GRACE_CYCLES = 2; // cycles a shown symbol may be absent before it's dropped for real
   let secondsLeft = REFRESH_SEC;
   let scanning = false;
   let tradfiCache = { symbols: new Set(), ts: 0 };
@@ -1056,6 +1075,52 @@
     }
     kept.sort((a,b) => elig[b].score - elig[a].score);
     return kept.map(s => elig[s]);
+  }
+
+  // v4.1 bugfix: builds the array selectStableTop() actually sees this
+  // cycle by re-injecting grace-eligible symbols that vanished from
+  // `results` this cycle (see lastKnownRows note above). This is the ONLY
+  // place that reads/writes lastKnownRows + missingStreak, so the effect
+  // is isolated to "who's allowed to keep competing" — it never touches
+  // scoring, filters, or anything upstream.
+  function applyStabilityGrace(results, prevShown){
+    const present = {};
+    results.forEach(r => { present[r.sym] = true; });
+
+    const augmented = results.slice();
+    prevShown.forEach(sym => {
+      if (present[sym]) return; // fresh data this cycle — nothing to do
+      const missed = (missingStreak[sym] || 0) + 1;
+      if (missed <= STABILITY_GRACE_CYCLES && lastKnownRows[sym]){
+        // still within grace: let it compete this cycle on its last-known
+        // row, tagged so the UI can show it's running on stale data
+        const graceRow = Object.assign({}, lastKnownRows[sym], { stale: missed });
+        augmented.push(graceRow);
+      }
+    });
+    return augmented;
+  }
+
+  // Call once per cycle, right after scoring, right before
+  // selectStableTop(): refreshes the cache for symbols that DID report
+  // fresh data, and advances/expires the miss-counter for symbols that
+  // didn't. Only tracks symbols currently in the shown top-N — no reason
+  // to remember one that already fell out on its own.
+  function updateStabilityCache(results, prevShown){
+    const present = {};
+    results.forEach(r => {
+      present[r.sym] = true;
+      lastKnownRows[r.sym] = r;
+      missingStreak[r.sym] = 0;
+    });
+    prevShown.forEach(sym => {
+      if (present[sym]) return;
+      missingStreak[sym] = (missingStreak[sym] || 0) + 1;
+      if (missingStreak[sym] > STABILITY_GRACE_CYCLES){
+        delete lastKnownRows[sym];
+        delete missingStreak[sym];
+      }
+    });
   }
 
   function updateStreaks(shownSyms){
@@ -1447,12 +1512,16 @@
       // Absence of this badge on every card in a cycle is a valid, honest
       // outcome (no candidate met the strict confluence bar that cycle).
       const premiumTag = r.premium ? ' <span class="streak-badge" title="Strict confluence: solid squeeze + confirmed multi-timeframe OI inflow + adequate liquidity + not already moved. Still a technical pattern match, not a guarantee.">💎Premium</span>' : '';
+      // v4.1: this symbol didn't report fresh data this cycle (failed an
+      // upstream filter transiently) — it's holding its slot on cached
+      // data under the stability grace window, not being re-scored live.
+      const staleTag = r.stale ? ' <span class="streak-badge" title="No fresh data this cycle (missed upstream filter/fetch) — holding its slot on last-known data, cycle ' + r.stale + ' of ' + STABILITY_GRACE_CYCLES + ' grace">⏳Stale</span>' : '';
       const chargePct = Math.max(0, Math.min(100, Math.round(r.score / PRACTICAL_SCORE_CEILING * 100)));
       return '' +
         '<div class="card">' +
           '<div class="card-head">' +
             '<div class="card-sym-row">' +
-              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + premiumTag + microTag + movingTag + '</div>' +
+              '<div class="card-sym">' + r.sym + tagStr + (r.solid ? ' 💥' : '') + premiumTag + microTag + movingTag + staleTag + '</div>' +
             '</div>' +
             '<div class="charge-meter">' +
               '<div class="charge-track"><div class="charge-fill ' + scoreClass(r.score) + '" style="width:' + chargePct + '%"></div></div>' +
@@ -1558,7 +1627,11 @@
       const scanRes = await scanOnce();
       const results = scanRes.results, scannedCount = scanRes.scannedCount, candidateCount = scanRes.candidateCount;
       const prevShownSet = new Set(lastShown); // top-N *before* this cycle's update
-      const shown = selectStableTop(results, lastShown, TOP_N, SWAP_MARGIN);
+      // order matters: read the grace cache (built from PRIOR cycles)
+      // before updateStabilityCache mutates it for the NEXT cycle
+      const eligibleThisCycle = applyStabilityGrace(results, lastShown);
+      const shown = selectStableTop(eligibleThisCycle, lastShown, TOP_N, SWAP_MARGIN);
+      updateStabilityCache(results, lastShown);
       lastShown = shown.map(r => r.sym);
       updateStreaks(lastShown);
       window.__bombLastShown = shown;
@@ -1569,6 +1642,12 @@
       // server also dedupes via a 6h cooldown per symbol regardless, this
       // just keeps request volume sane. Fire-and-forget: never blocks
       // rendering, never surfaces an error to the user.
+      //
+      // `features` is the interpretable snapshot of WHY this symbol
+      // scored what it scored — not just the final number. This is what
+      // makes a later "which setups actually win" analysis (by a human or
+      // an LLM) possible: score alone tells you the outcome was ranked
+      // high, features tell you what kind of setup it was.
       shown.forEach(r => {
         if (prevShownSet.has(r.sym)) return;
         fetch('/api/log-signal', {
@@ -1580,7 +1659,26 @@
             tier: scoreTierName(r.score),
             premium: !!r.premium,
             microCap: !!r.microCap,
-            streak: streaks[r.sym] || 1
+            streak: streaks[r.sym] || 1,
+            features: {
+              fundingRate: r.fr,
+              volSpike: r.volSpike,
+              bbWidth: r.bb,
+              rangePct: r.rng,
+              takerRatio: r.takerRatio,
+              oiUsd: r.oiUsd,
+              oiChg1h: r.oiChg1h,
+              oiChg4h: r.oiChg4h,
+              oiFlow: r.oiFlow,
+              volOi: r.volOi,
+              squeezeLen: r.squeezeLen,
+              priceChg1h: r.priceChg1h,
+              aboveEma100: r.aboveEma100,
+              alreadyMoving: r.alreadyMoving,
+              solid: r.solid,
+              setupTag: r.setupTag || null,
+              reasons: r.reasons
+            }
           })
         }).catch(function(){ /* best-effort — a missed log just means one fewer data point */ });
       });

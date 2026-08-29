@@ -40,6 +40,8 @@ const SIGNAL_COOLDOWN_SECONDS = 6 * 3600;   // don't re-log the same symbol
                                              // one signal per "fresh coil",
                                              // not one per scan cycle
 const SIGNAL_DATA_TTL_SECONDS = 35 * 86400; // bound keyspace growth (~35 days)
+const REASONS_MAX_LEN = 500; // cap the free-text reasons string so one
+                              // pathological row can't bloat Redis storage
 
 function isValidBody(b) {
   return b && typeof b === 'object'
@@ -49,6 +51,39 @@ function isValidBody(b) {
     && typeof b.premium === 'boolean'
     && typeof b.microCap === 'boolean'
     && Number.isInteger(b.streak) && b.streak >= 1 && b.streak <= 100;
+}
+
+// `features` is optional metadata — the interpretable breakdown behind the
+// score (funding rate, OI flow, squeeze length, etc), captured for later
+// analysis of WHICH setups actually win, not just whether the score was
+// high. It's cosmetic like score/tier/premium (doesn't affect win/loss
+// truth), so we accept it from the client as long as it's shaped sanely —
+// wrong/missing types are just dropped to null rather than rejecting the
+// whole signal, since a signal without features is still worth logging.
+function sanitizeFeatures(f) {
+  if (!f || typeof f !== 'object') return null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+  const bool = (v) => (typeof v === 'boolean') ? v : null;
+  const str = (v, max) => (typeof v === 'string') ? v.slice(0, max) : null;
+  return {
+    fundingRate: num(f.fundingRate),
+    volSpike: num(f.volSpike),
+    bbWidth: num(f.bbWidth),
+    rangePct: num(f.rangePct),
+    takerRatio: num(f.takerRatio),
+    oiUsd: num(f.oiUsd),
+    oiChg1h: num(f.oiChg1h),
+    oiChg4h: num(f.oiChg4h),
+    oiFlow: str(f.oiFlow, 20),
+    volOi: num(f.volOi),
+    squeezeLen: num(f.squeezeLen),
+    priceChg1h: num(f.priceChg1h),
+    aboveEma100: bool(f.aboveEma100),
+    alreadyMoving: bool(f.alreadyMoving),
+    solid: bool(f.solid),
+    setupTag: str(f.setupTag, 30),
+    reasons: str(f.reasons, REASONS_MAX_LEN)
+  };
 }
 
 async function fetchEntryPrice(sym) {
@@ -114,6 +149,7 @@ export default async function handler(req, res) {
       premium: body.premium,
       microCap: body.microCap,
       streak: body.streak,
+      features: sanitizeFeatures(body.features),
       peakGain: 0,
       peakGainAt1h: null,
       peakGainAt4h: null,
