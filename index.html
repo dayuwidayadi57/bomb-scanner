@@ -600,6 +600,33 @@
   // all lagging/confirmatory signals). That's why top-1/2/3 kept surfacing
   // coins already mid-move instead of coiled ones. Require a real OI move.
   const ACCUM_OI_CHG_MIN = 3;    // was: any oiChg1h > 0
+
+  // --- Net OI Flow: price direction × OI direction over the same 1h window ---
+  // OI itself has no long/short breakdown on the public API — it's just
+  // total notional of open positions. But crossing its delta with price
+  // delta over the same window lets us infer WHICH side that delta came
+  // from: OI can only rise via new positions, and a rising OI during a
+  // price rise can only be new longs (new shorts opening would need price
+  // pressure downward, not up). Same logic for the other 3 quadrants.
+  //
+  // Thresholds are deliberately wide — this scanner targets swing/medium-
+  // to-long-term setups, not scalping, so single-cycle live-price wiggle
+  // near a tight epsilon would flip the quadrant every ~2min refresh for
+  // no real reason. A quadrant reading is also only trusted at full
+  // strength if it agrees with the 4h OI trend (see
+  // OI_FLOW_CONFIRM_MIN below) — a 1h blip against a strong opposing 4h
+  // trend is dampened rather than dropped, since it doesn't invalidate the
+  // read, just lowers confidence in it.
+  const OI_FLOW_PRICE_EPS = 0.25;  // %, live price vs last closed 1h candle
+  const OI_FLOW_OI_EPS = 1.0;      // %/1h
+  const OI_FLOW_CONFIRM_MIN = 2;   // %/4h — min |oiChg4h| to count as agreeing/contradicting the 1h read
+  const OI_FLOW_POINTS = { LONG_OPEN: 8, SHORT_COVER: 2, SHORT_OPEN: -4, LONG_CLOSE: -2 };
+  const OI_FLOW_LABELS = {
+    LONG_OPEN:   '🟢 LongOpen',
+    SHORT_COVER: '🔵 ShortCover',
+    SHORT_OPEN:  '🔴 ShortOpen',
+    LONG_CLOSE:  '🟠 LongClose'
+  };
   // If the coin has already sprinted recently, it's not "pre" anymore —
   // penalize hard even if it still has decent squeeze/accum score.
   const ALREADY_MOVING_VEL_PCT = 1.5;  // %/h over last 3 candles (see computeVelocity)
@@ -837,6 +864,52 @@
     }
 
     return { score, reasons, priceVel };
+  }
+
+  // 1h price % change ending "now" — live price vs the close of the last
+  // fully-closed 1h candle. This mirrors oiChg1h's window (which also
+  // ends "now", see fetchOIMap): using two closed-but-not-current candles
+  // instead would leave this window trailing oiChg1h's by up to an hour.
+  function computePriceChg1h(closes, livePrice){
+    const n = closes.length;
+    if (n < 2) return null; // need at least one fully-closed candle
+    const prevClose = closes[n-2];
+    if (!prevClose || !isFinite(livePrice)) return null;
+    return (livePrice - prevClose) / prevClose * 100;
+  }
+
+  // A 1h flow read is only trusted at full strength when it doesn't fight
+  // a meaningfully-sized 4h OI trend in the opposite direction — e.g.
+  // LONG_OPEN/SHORT_OPEN both read oiChg1h as rising, so if oiChg4h is
+  // actually net falling by a real margin, that 1h uptick is more likely
+  // noise within a bigger unwind than the start of a new trend. No 4h
+  // data (null) can't contradict anything, so it's left un-dampened —
+  // same fallback stance the rest of the scoring already takes elsewhere
+  // when 4h data is missing.
+  function isOiFlow4hContradicting(oiFlow, oiChg4h){
+    if (oiChg4h === null || !isFinite(oiChg4h)) return false;
+    if ((oiFlow === 'LONG_OPEN' || oiFlow === 'SHORT_OPEN') && oiChg4h <= -OI_FLOW_CONFIRM_MIN) return true;
+    if ((oiFlow === 'SHORT_COVER' || oiFlow === 'LONG_CLOSE') && oiChg4h >= OI_FLOW_CONFIRM_MIN) return true;
+    return false;
+  }
+
+  // Cross price direction with OI direction over the same 1h window to
+  // infer which side of the book the OI delta likely came from.
+  //   price↑ + OI↑ => new longs opening      (net flow IN,  long side)
+  //   price↑ + OI↓ => shorts covering        (net flow OUT, short side)
+  //   price↓ + OI↑ => new shorts opening     (net flow IN,  short side)
+  //   price↓ + OI↓ => longs closing/liq'd    (net flow OUT, long side)
+  // Returns null (unclassifiable) or 'FLAT' (no clear direction) rather
+  // than guessing when either input is too small/missing.
+  function classifyOiFlow(priceChg1h, oiChg1h){
+    if (priceChg1h === null || oiChg1h === null || !isFinite(priceChg1h) || !isFinite(oiChg1h)) return null;
+    const priceUp = priceChg1h > OI_FLOW_PRICE_EPS, priceDown = priceChg1h < -OI_FLOW_PRICE_EPS;
+    const oiUp = oiChg1h > OI_FLOW_OI_EPS, oiDown = oiChg1h < -OI_FLOW_OI_EPS;
+    if (priceUp && oiUp) return 'LONG_OPEN';
+    if (priceUp && oiDown) return 'SHORT_COVER';
+    if (priceDown && oiUp) return 'SHORT_OPEN';
+    if (priceDown && oiDown) return 'LONG_CLOSE';
+    return 'FLAT';
   }
 
   // Exponential Moving Average, seeded with an SMA of the first `period` closes.
@@ -1185,6 +1258,19 @@
           if (negPts){ score += negPts; reasons.push(negLabel); }
         }
 
+        // --- Net OI Flow: which side the 1h OI delta likely came from ---
+        const priceChg1h = computePriceChg1h(closes, price);
+        const oiFlow = classifyOiFlow(priceChg1h, oiChg1h);
+        if (oiFlow && oiFlow !== 'FLAT'){
+          let flowPts = OI_FLOW_POINTS[oiFlow];
+          let flowLabel = OI_FLOW_LABELS[oiFlow];
+          if (isOiFlow4hContradicting(oiFlow, oiChg4h)){
+            flowPts = Math.round(flowPts * 0.5);
+            flowLabel += ' (4h contra, dampened)';
+          }
+          if (flowPts){ score += flowPts; reasons.push(flowLabel + ' ' + (flowPts >= 0 ? '+' : '') + flowPts); }
+        }
+
         const velRes = computeVelocity(closes, vols);
         score += velRes.score;
         velRes.reasons.forEach(r => reasons.push(r));
@@ -1250,6 +1336,7 @@
         const candidateRow = {
           sym: sym, price: price, pct24: pct24, qv: qv, oiUsd: oiUsd, volOi: volOi,
           oiChg1h: oiChg1h, oiChg4h: oiChg4h, squeezeLen: squeezeLen,
+          priceChg1h: priceChg1h, oiFlow: oiFlow,
           score: score, fr: fr, volSpike: volSpike, bb: bbWidth, rng: rngPct,
           takerRatio: tr, solid: isSolid, setupTag: setupTag,
           microCap: isMicroCap, alreadyMoving: alreadyMoving,
